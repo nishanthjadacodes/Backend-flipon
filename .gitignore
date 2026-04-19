@@ -11,6 +11,11 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 
+# Firebase Admin SDK service account — NEVER commit this
+firebase-admin.json
+firebase-adminsdk-*.json
+*-firebase-adminsdk-*.json
+
 # Logs
 logs
 *.log

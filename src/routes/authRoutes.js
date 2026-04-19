@@ -2,7 +2,8 @@ import express from 'express';
 import {
   sendOTP,
   verifyOTP,
-  signup
+  signup,
+  guestLogin,
 } from '../controllers/authController.js';
 import { adminLogin, me, changePassword } from '../controllers/adminAuthController.js';
 import auth from '../middleware/auth.js';
@@ -17,6 +18,10 @@ router.post('/verify-otp', verifyOTP);
 
 // Signup
 router.post('/signup', signup);
+
+// Guest login — app calls this silently on splash and gets a usable JWT
+// so every authenticated route keeps working without a login screen.
+router.post('/guest-login', guestLogin);
 
 // Admin email+password login (admin panel)
 router.post('/admin/login', adminLogin);

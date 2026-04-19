@@ -163,4 +163,50 @@ const signup = async (req, res) => {
   }
 };
 
-export { sendOTP, verifyOTP, signup };
+// ─── Guest login ───────────────────────────────────────────────────────────
+// Temporary auth scheme: the app calls this silently on launch and gets a
+// usable JWT without showing any login screen. Backed by a single shared
+// `guest_customer` row so every existing authenticated route (profile,
+// bookings, enquiries, etc.) keeps working end-to-end. Swap this out for
+// real SSO / OTP / Firebase later when needed.
+const GUEST_MOBILE = '0000000000';
+const guestLogin = async (_req, res) => {
+  try {
+    let user = await User.findByMobile(GUEST_MOBILE);
+    if (!user) {
+      user = await User.create({
+        mobile: GUEST_MOBILE,
+        name: 'Guest',
+        role: 'customer',
+        is_verified: true,
+        is_active: true,
+      });
+      console.log('[guest-login] Created shared guest user');
+    }
+
+    const token = jwt.sign(
+      { id: user.id, mobile: user.mobile, role: user.role, name: user.name },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    return res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        mobile: user.mobile,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        is_verified: user.is_verified,
+        is_active: user.is_active,
+      },
+    });
+  } catch (error) {
+    console.error('[guest-login] Unexpected error:', error);
+    res.status(500).json({ success: false, message: 'Failed to start guest session' });
+  }
+};
+
+export { sendOTP, verifyOTP, signup, guestLogin };

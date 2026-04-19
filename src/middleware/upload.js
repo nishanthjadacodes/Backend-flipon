@@ -141,7 +141,7 @@ export const deleteFile = (filePath) => {
 
 // Utility function to get file URL
 export const getFileUrl = (fileName, category = 'documents') => {
-  const baseUrl = process.env.BASE_URL || 'http://10.109.199.253:3001';
+  const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3001}`;
   return `${baseUrl}/uploads/${category}/${fileName}`;
 };
 

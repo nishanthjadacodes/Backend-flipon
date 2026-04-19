@@ -76,7 +76,7 @@ Enquiry.belongsTo(CompanyProfile, { foreignKey: 'company_profile_id', as: 'compa
 // Sync all models with database
 const syncModels = async () => {
   try {
-    await sequelize.sync({ alter: false });
+    await sequelize.sync({ alter: process.env.DB_ALTER === 'true' });
     // Create new tables only (won't touch existing ones)
     await Referral.sync();
     await Ticket.sync();
