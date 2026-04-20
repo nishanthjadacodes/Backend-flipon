@@ -68,8 +68,21 @@ export const upsertCompanyProfile = async (req, res) => {
       'poc_name', 'poc_designation', 'poc_mobile', 'poc_email',
       'msme_category', 'nic_code',
     ];
+    // Fields that are ENUMs or have defaults — empty string fails validation
+    // in Sequelize, so coerce "" to undefined and let the default kick in.
+    const enumOrDefaultFields = new Set(['msme_category']);
     const payload = { user_id: req.user.id };
-    for (const k of allowed) if (normalized[k] !== undefined) payload[k] = normalized[k];
+    for (const k of allowed) {
+      const v = normalized[k];
+      if (v === undefined) continue;
+      if (typeof v === 'string' && v.trim() === '') {
+        // Skip blank optional fields entirely so DB defaults / null apply.
+        if (enumOrDefaultFields.has(k)) continue;
+        payload[k] = null; // nullable STRING/TEXT columns accept null
+        continue;
+      }
+      payload[k] = v;
+    }
 
     const existing = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
     let profile;
@@ -83,7 +96,15 @@ export const upsertCompanyProfile = async (req, res) => {
     res.json({ success: true, data: profile });
   } catch (error) {
     console.error('upsertCompanyProfile error:', error);
-    res.status(500).json({ success: false, message: 'Failed to save company profile' });
+    // Surface Sequelize validation + unique-constraint errors so the app
+    // can show the user what to fix, instead of a generic "Failed to save".
+    if (error?.name === 'SequelizeValidationError' || error?.name === 'SequelizeUniqueConstraintError') {
+      const detail = (error.errors || [])
+        .map((e) => e.message || `${e.path}: ${e.type}`)
+        .join('; ') || error.message;
+      return res.status(400).json({ success: false, message: detail });
+    }
+    res.status(500).json({ success: false, message: error?.message || 'Failed to save company profile' });
   }
 };
 
