@@ -170,43 +170,60 @@ const signup = async (req, res) => {
 // bookings, enquiries, etc.) keeps working end-to-end. Swap this out for
 // real SSO / OTP / Firebase later when needed.
 const GUEST_MOBILE = '0000000000';
+const AGENT_GUEST_MOBILE = '1111111111';
+
+// Shared helper — create-or-fetch a role-specific guest user, sign a 30-day JWT.
+const issueGuestToken = async (mobile, name, role) => {
+  let user = await User.findByMobile(mobile);
+  if (!user) {
+    user = await User.create({
+      mobile,
+      name,
+      role,
+      is_verified: true,
+      is_active: true,
+    });
+    console.log(`[guest-login] Created shared ${role} guest user (${mobile})`);
+  }
+  const token = jwt.sign(
+    { id: user.id, mobile: user.mobile, role: user.role, name: user.name },
+    process.env.JWT_SECRET,
+    { expiresIn: '30d' }
+  );
+  return {
+    token,
+    user: {
+      id: user.id,
+      mobile: user.mobile,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      is_verified: user.is_verified,
+      is_active: user.is_active,
+    },
+  };
+};
+
 const guestLogin = async (_req, res) => {
   try {
-    let user = await User.findByMobile(GUEST_MOBILE);
-    if (!user) {
-      user = await User.create({
-        mobile: GUEST_MOBILE,
-        name: 'Guest',
-        role: 'customer',
-        is_verified: true,
-        is_active: true,
-      });
-      console.log('[guest-login] Created shared guest user');
-    }
-
-    const token = jwt.sign(
-      { id: user.id, mobile: user.mobile, role: user.role, name: user.name },
-      process.env.JWT_SECRET,
-      { expiresIn: '30d' }
-    );
-
-    return res.json({
-      success: true,
-      token,
-      user: {
-        id: user.id,
-        mobile: user.mobile,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        is_verified: user.is_verified,
-        is_active: user.is_active,
-      },
-    });
+    const { token, user } = await issueGuestToken(GUEST_MOBILE, 'Guest', 'customer');
+    return res.json({ success: true, token, user });
   } catch (error) {
     console.error('[guest-login] Unexpected error:', error);
     res.status(500).json({ success: false, message: 'Failed to start guest session' });
   }
 };
 
-export { sendOTP, verifyOTP, signup, guestLogin };
+// Agent-app twin of /auth/guest-login — returns an agent-role JWT so the
+// shared tester pool can see unassigned pending bookings.
+const agentGuestLogin = async (_req, res) => {
+  try {
+    const { token, user } = await issueGuestToken(AGENT_GUEST_MOBILE, 'Partner Guest', 'agent');
+    return res.json({ success: true, token, user });
+  } catch (error) {
+    console.error('[agent-guest-login] Unexpected error:', error);
+    res.status(500).json({ success: false, message: 'Failed to start agent guest session' });
+  }
+};
+
+export { sendOTP, verifyOTP, signup, guestLogin, agentGuestLogin };

@@ -4,6 +4,7 @@ import {
   verifyOTP,
   signup,
   guestLogin,
+  agentGuestLogin,
 } from '../controllers/authController.js';
 import { adminLogin, me, changePassword } from '../controllers/adminAuthController.js';
 import auth from '../middleware/auth.js';
@@ -22,6 +23,10 @@ router.post('/signup', signup);
 // Guest login — app calls this silently on splash and gets a usable JWT
 // so every authenticated route keeps working without a login screen.
 router.post('/guest-login', guestLogin);
+
+// Agent-app twin — issues a shared-agent JWT so every tester of the
+// AgentApp sees the unassigned pending booking pool on Dashboard / Tasks.
+router.post('/agent-guest-login', agentGuestLogin);
 
 // Admin email+password login (admin panel)
 router.post('/admin/login', adminLogin);
