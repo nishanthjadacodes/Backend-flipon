@@ -26,6 +26,8 @@ import geolocationRoutes from './src/routes/geolocationRoutes.js';
 import notificationRoutes from './src/routes/notificationRoutes.js';
 import companyProfileRoutes from './src/routes/companyProfileRoutes.js';
 import enquiryRoutes from './src/routes/enquiryRoutes.js';
+import vaultRoutes from './src/routes/vaultRoutes.js';
+import b2bReportsRoutes from './src/routes/b2bReportsRoutes.js';
 
 const app = express();
 
@@ -154,6 +156,8 @@ app.use('/api/earnings', earningsRoutes);
 app.use('/api/referrals', referralRoutes);
 app.use('/api/company-profile', companyProfileRoutes);
 app.use('/api/enquiries', enquiryRoutes);
+app.use('/api/vault', vaultRoutes);
+app.use('/api/admin/reports/b2b', b2bReportsRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

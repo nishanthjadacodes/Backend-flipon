@@ -12,6 +12,8 @@ import Payout from './Payout.js';
 import CompanyProfile from './CompanyProfile.js';
 import Enquiry from './Enquiry.js';
 import EnquiryStage from './EnquiryStage.js';
+import VaultDocument from './VaultDocument.js';
+import VaultAccessLog from './VaultAccessLog.js';
 
 // Define associations
 User.hasMany(Booking, { foreignKey: 'customer_id', as: 'customerBookings' });
@@ -79,6 +81,19 @@ Enquiry.hasMany(EnquiryStage,    { foreignKey: 'enquiry_id', as: 'stages' });
 EnquiryStage.belongsTo(Enquiry,  { foreignKey: 'enquiry_id', as: 'enquiry' });
 EnquiryStage.belongsTo(Document, { foreignKey: 'document_id', as: 'document' });
 
+// VaultDocument — encrypted corporate document storage for B2B enquiries.
+Enquiry.hasMany(VaultDocument,       { foreignKey: 'enquiry_id', as: 'vaultDocuments' });
+VaultDocument.belongsTo(Enquiry,     { foreignKey: 'enquiry_id', as: 'enquiry' });
+CompanyProfile.hasMany(VaultDocument,{ foreignKey: 'company_profile_id', as: 'vaultDocuments' });
+VaultDocument.belongsTo(CompanyProfile, { foreignKey: 'company_profile_id', as: 'companyProfile' });
+User.hasMany(VaultDocument,          { foreignKey: 'uploaded_by', as: 'uploadedVaultDocs' });
+VaultDocument.belongsTo(User,        { foreignKey: 'uploaded_by', as: 'uploader' });
+
+// VaultAccessLog — append-only audit trail for vault access.
+VaultDocument.hasMany(VaultAccessLog,   { foreignKey: 'vault_document_id', as: 'accessLogs' });
+VaultAccessLog.belongsTo(VaultDocument, { foreignKey: 'vault_document_id', as: 'vaultDocument' });
+VaultAccessLog.belongsTo(User,          { foreignKey: 'actor_user_id', as: 'actor' });
+
 // Sync all models with database
 const syncModels = async () => {
   try {
@@ -91,6 +106,8 @@ const syncModels = async () => {
     await CompanyProfile.sync();
     await Enquiry.sync();
     await EnquiryStage.sync();
+    await VaultDocument.sync();
+    await VaultAccessLog.sync();
     console.log('Database models synchronized successfully.');
   } catch (error) {
     console.error('Error synchronizing database models:', error);
@@ -112,6 +129,8 @@ export {
   CompanyProfile,
   Enquiry,
   EnquiryStage,
+  VaultDocument,
+  VaultAccessLog,
   sequelize,
   syncModels
 };
