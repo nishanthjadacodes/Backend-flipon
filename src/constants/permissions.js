@@ -93,13 +93,14 @@ export const ROLE_PERMISSIONS = {
   ],
 
   // B2B / Industrial Admin: B2B pipeline, document vault, B2B-only reports.
-  // Restriction: no B2C customer data, no field agent management.
+  // Restriction per spec: NO access to B2C customer data or B2C bookings,
+  // NO field-agent management. BOOKING_VIEW / AGENT_VIEW are intentionally
+  // absent — admin routes that check those perms will reject b2b_admin.
+  // For industrial work, they use B2B_PIPELINE (enquiries, stages) instead.
   b2b_admin: [
     PERMISSIONS.DASHBOARD_VIEW,
-    PERMISSIONS.BOOKING_VIEW,
     PERMISSIONS.B2B_PIPELINE,
     PERMISSIONS.B2B_REPORTS,
-    PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_VAULT,
     PERMISSIONS.SERVICE_VIEW,
     PERMISSIONS.REPORTS_B2B,

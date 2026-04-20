@@ -1,4 +1,38 @@
-import { Enquiry, Service, CompanyProfile, User } from '../models/index.js';
+import { Enquiry, EnquiryStage, Service, CompanyProfile, User } from '../models/index.js';
+import { getStageTemplate } from '../services/stageTemplates.js';
+import { sendPushNotification } from '../services/notificationService.js';
+
+// Helper — fire-and-forget push notification. Never blocks the API response
+// or throws up into the request handler.
+const notifyCustomerAsync = (customerId, title, body, data = {}) => {
+  sendPushNotification(customerId, { title, body, data, priority: 'high' })
+    .then((r) => {
+      if (!r?.success) console.log('[push] notify failed:', r?.message);
+    })
+    .catch((e) => console.log('[push] notify error:', e?.message));
+};
+
+// Bulk-insert the default stage pipeline for a newly-created enquiry.
+// Runs once at enquiry creation time; the first stage is auto-marked
+// `in_progress` so the customer sees immediate feedback on the tracker.
+const seedDefaultStages = async (enquiry, service) => {
+  try {
+    const template = getStageTemplate(service);
+    const rows = template.map((s, idx) => ({
+      enquiry_id: enquiry.id,
+      sequence: idx,
+      stage_key: s.stage_key,
+      label: s.label,
+      description: s.description || null,
+      status: idx === 0 ? 'in_progress' : 'pending',
+      started_at: idx === 0 ? new Date() : null,
+    }));
+    await EnquiryStage.bulkCreate(rows);
+  } catch (e) {
+    // Don't fail the enquiry creation because of a stage-seed hiccup.
+    console.error('seedDefaultStages failed:', e?.message);
+  }
+};
 
 // ─── POST /api/enquiries ────────────────────────────────────────────────────
 // Customer submits a quote request for an industrial service.
@@ -9,8 +43,6 @@ export const createEnquiry = async (req, res) => {
       return res.status(400).json({ success: false, message: 'service_id is required' });
     }
 
-    // Gate — only quote-based services can be enquired. Fixed-price services
-    // must go through the Booking flow instead.
     const service = await Service.findOne({ where: { id: service_id, is_active: true } });
     if (!service) {
       return res.status(404).json({ success: false, message: 'Service not found' });
@@ -22,8 +54,6 @@ export const createEnquiry = async (req, res) => {
       });
     }
 
-    // NDA + Company Profile gate — enforced here so the API can't be called
-    // out-of-band to bypass the mobile-app checks.
     const [profile, user] = await Promise.all([
       CompanyProfile.findOne({ where: { user_id: req.user.id } }),
       User.findByPk(req.user.id, { attributes: ['id', 'nda_accepted_at'] }),
@@ -52,6 +82,16 @@ export const createEnquiry = async (req, res) => {
       preferred_contact_time: preferred_contact_time || null,
       status: 'pending',
     });
+
+    // Seed the stage pipeline so the tracker has data immediately.
+    await seedDefaultStages(enquiry, service);
+
+    notifyCustomerAsync(
+      req.user.id,
+      'Enquiry Submitted',
+      `Your enquiry for ${service.name} is in the queue for review.`,
+      { type: 'enquiry', enquiry_id: enquiry.id, action: 'submitted' },
+    );
 
     res.status(201).json({ success: true, data: enquiry });
   } catch (error) {
@@ -97,6 +137,75 @@ export const getEnquiryById = async (req, res) => {
   }
 };
 
+// ─── GET /api/enquiries/:id/stages ──────────────────────────────────────────
+// Customer reads the stage-by-stage tracker for their enquiry.
+export const getEnquiryStages = async (req, res) => {
+  try {
+    const enquiry = await Enquiry.findOne({
+      where: { id: req.params.id, customer_id: req.user.id },
+      attributes: ['id'],
+    });
+    if (!enquiry) return res.status(404).json({ success: false, message: 'Enquiry not found' });
+
+    const stages = await EnquiryStage.findAll({
+      where: { enquiry_id: enquiry.id },
+      order: [['sequence', 'ASC']],
+    });
+    res.json({ success: true, data: stages });
+  } catch (error) {
+    console.error('getEnquiryStages error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch stages' });
+  }
+};
+
+// ─── PATCH /api/enquiries/:id/stages/:stageId (admin) ───────────────────────
+// Admin advances or annotates a stage. Sends a push to the customer on any
+// state change or note update so they see real-time progress.
+export const updateEnquiryStage = async (req, res) => {
+  try {
+    const { status, admin_note, document_id } = req.body;
+
+    const stage = await EnquiryStage.findByPk(req.params.stageId);
+    if (!stage || stage.enquiry_id !== req.params.id) {
+      return res.status(404).json({ success: false, message: 'Stage not found' });
+    }
+
+    const updates = {};
+    if (status) {
+      if (!['pending', 'in_progress', 'done', 'blocked', 'skipped'].includes(status)) {
+        return res.status(400).json({ success: false, message: 'Invalid status' });
+      }
+      updates.status = status;
+      if (status === 'in_progress' && !stage.started_at) updates.started_at = new Date();
+      if (status === 'done' && !stage.completed_at) updates.completed_at = new Date();
+    }
+    if (admin_note !== undefined) updates.admin_note = admin_note;
+    if (document_id !== undefined) updates.document_id = document_id;
+
+    await stage.update(updates);
+
+    // Notify the customer
+    const enquiry = await Enquiry.findByPk(stage.enquiry_id, { attributes: ['id', 'customer_id'] });
+    if (enquiry) {
+      const verb = updates.status === 'done' ? 'completed'
+        : updates.status === 'blocked' ? 'blocked'
+        : updates.status === 'in_progress' ? 'started'
+        : 'updated';
+      notifyCustomerAsync(
+        enquiry.customer_id,
+        'Application Update',
+        `${stage.label} — ${verb}.`,
+        { type: 'enquiry', enquiry_id: enquiry.id, stage_id: stage.id, action: 'stage_update' },
+      );
+    }
+
+    res.json({ success: true, data: stage });
+  } catch (error) {
+    console.error('updateEnquiryStage error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update stage' });
+  }
+};
+
 // ─── POST /api/enquiries/:id/accept ─────────────────────────────────────────
 export const acceptQuote = async (req, res) => {
   try {
@@ -108,6 +217,14 @@ export const acceptQuote = async (req, res) => {
       return res.status(400).json({ success: false, message: `Cannot accept — current status is '${enquiry.status}'.` });
     }
     await enquiry.update({ status: 'accepted', responded_at: new Date() });
+
+    notifyCustomerAsync(
+      enquiry.customer_id,
+      'Quote Accepted',
+      'We have recorded your acceptance. Invoice is on the way.',
+      { type: 'enquiry', enquiry_id: enquiry.id, action: 'accepted' },
+    );
+
     res.json({ success: true, data: enquiry });
   } catch (error) {
     console.error('acceptQuote error:', error);
@@ -126,6 +243,14 @@ export const rejectQuote = async (req, res) => {
       return res.status(400).json({ success: false, message: `Cannot reject — current status is '${enquiry.status}'.` });
     }
     await enquiry.update({ status: 'rejected', responded_at: new Date() });
+
+    notifyCustomerAsync(
+      enquiry.customer_id,
+      'Enquiry Rejected',
+      'You have rejected the quote. Submit a new enquiry if you change your mind.',
+      { type: 'enquiry', enquiry_id: enquiry.id, action: 'rejected' },
+    );
+
     res.json({ success: true, data: enquiry });
   } catch (error) {
     console.error('rejectQuote error:', error);
@@ -144,6 +269,14 @@ export const cancelEnquiry = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Enquiry is already in progress or completed.' });
     }
     await enquiry.update({ status: 'cancelled' });
+
+    notifyCustomerAsync(
+      enquiry.customer_id,
+      'Enquiry Cancelled',
+      'Your enquiry has been cancelled.',
+      { type: 'enquiry', enquiry_id: enquiry.id, action: 'cancelled' },
+    );
+
     res.json({ success: true, data: enquiry });
   } catch (error) {
     console.error('cancelEnquiry error:', error);

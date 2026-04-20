@@ -9,7 +9,8 @@ import { Server } from 'socket.io';
 import http from 'http';
 
 import { sequelize } from './src/config/database.js';
-import { syncModels } from './src/models/index.js';
+import { syncModels, AdminRole } from './src/models/index.js';
+import { ROLE_PERMISSIONS } from './src/constants/permissions.js';
 import { initializeSocket } from './src/config/socket.js';
 import authRoutes from './src/routes/authRoutes.js';
 import serviceRoutes from './src/routes/serviceRoutes.js';
@@ -201,6 +202,32 @@ const startServer = async () => {
     await sequelize.authenticate();
     console.log('Database connection established successfully.');
     await syncModels();
+
+    // Keep admin_roles.permissions in sync with the code-defined constants so
+    // a redeploy is enough to push new permission grants — no manual seed
+    // rerun required. Upserts each role; leaves any admin roles not listed
+    // in constants untouched.
+    try {
+      for (const [roleName, perms] of Object.entries(ROLE_PERMISSIONS)) {
+        const [row, created] = await AdminRole.findOrCreate({
+          where: { role_name: roleName },
+          defaults: { role_name: roleName, permissions: perms },
+        });
+        if (!created) {
+          const current = Array.isArray(row.permissions) ? row.permissions : [];
+          const same =
+            current.length === perms.length && current.every((p, i) => p === perms[i]);
+          if (!same) {
+            await row.update({ permissions: perms });
+            console.log(`[rbac] refreshed permissions for ${roleName}`);
+          }
+        } else {
+          console.log(`[rbac] created role ${roleName}`);
+        }
+      }
+    } catch (e) {
+      console.warn('[rbac] failed to refresh admin roles on boot:', e?.message);
+    }
 
     // Create a single HTTP server shared by Express and Socket.io
     const server = http.createServer(app);

@@ -11,6 +11,7 @@ import AuditLog from './AuditLog.js';
 import Payout from './Payout.js';
 import CompanyProfile from './CompanyProfile.js';
 import Enquiry from './Enquiry.js';
+import EnquiryStage from './EnquiryStage.js';
 
 // Define associations
 User.hasMany(Booking, { foreignKey: 'customer_id', as: 'customerBookings' });
@@ -73,6 +74,11 @@ Enquiry.belongsTo(Service, { foreignKey: 'service_id', as: 'service' });
 CompanyProfile.hasMany(Enquiry,   { foreignKey: 'company_profile_id', as: 'enquiries' });
 Enquiry.belongsTo(CompanyProfile, { foreignKey: 'company_profile_id', as: 'companyProfile' });
 
+// EnquiryStage — per-enquiry granular progress tracker (ordered list).
+Enquiry.hasMany(EnquiryStage,    { foreignKey: 'enquiry_id', as: 'stages' });
+EnquiryStage.belongsTo(Enquiry,  { foreignKey: 'enquiry_id', as: 'enquiry' });
+EnquiryStage.belongsTo(Document, { foreignKey: 'document_id', as: 'document' });
+
 // Sync all models with database
 const syncModels = async () => {
   try {
@@ -84,6 +90,7 @@ const syncModels = async () => {
     await Payout.sync();
     await CompanyProfile.sync();
     await Enquiry.sync();
+    await EnquiryStage.sync();
     console.log('Database models synchronized successfully.');
   } catch (error) {
     console.error('Error synchronizing database models:', error);
@@ -104,6 +111,7 @@ export {
   Payout,
   CompanyProfile,
   Enquiry,
+  EnquiryStage,
   sequelize,
   syncModels
 };

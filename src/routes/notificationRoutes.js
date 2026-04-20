@@ -9,9 +9,46 @@ import {
   sendLocationUpdateNotification,
   getNotificationHistory
 } from '../services/notificationService.js';
+import { User } from '../models/index.js';
 import auth from '../middleware/auth.js';
 
 const router = express.Router();
+
+// ─── POST /api/notifications/register-token ─────────────────────────────────
+// Mobile app uploads its Expo push token on launch (and again if the token
+// rotates). Stored on the User row so subsequent sends can look it up.
+router.post('/register-token', auth, async (req, res) => {
+  try {
+    const { token, platform } = req.body;
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ success: false, message: 'token is required' });
+    }
+    // Basic shape check — Expo tokens look like ExponentPushToken[...] or
+    // ExpoPushToken[...]. Reject anything else.
+    if (!/^Expo(nent)?PushToken\[.+\]$/.test(token)) {
+      return res.status(400).json({ success: false, message: 'Invalid Expo push token format' });
+    }
+    await User.update({ expo_push_token: token }, { where: { id: req.user.id } });
+    console.log(`[push] registered token for user ${req.user.id} (${platform || 'unknown platform'})`);
+    res.json({ success: true, message: 'Push token registered' });
+  } catch (error) {
+    console.error('register-token error:', error);
+    res.status(500).json({ success: false, message: 'Failed to register push token' });
+  }
+});
+
+// ─── DELETE /api/notifications/register-token ───────────────────────────────
+// Called on logout so future pushes don't hit a device that's no longer
+// logged into this account.
+router.delete('/register-token', auth, async (req, res) => {
+  try {
+    await User.update({ expo_push_token: null }, { where: { id: req.user.id } });
+    res.json({ success: true, message: 'Push token cleared' });
+  } catch (error) {
+    console.error('clear-token error:', error);
+    res.status(500).json({ success: false, message: 'Failed to clear push token' });
+  }
+});
 
 // Send single push notification
 router.post('/send', auth, async (req, res) => {
