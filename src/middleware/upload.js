@@ -66,40 +66,21 @@ const storage = multer.diskStorage({
   }
 });
 
-// File filter for allowed file types
+// File filter — accept any common document, image, or office file type.
+// Blocks executable/script extensions for safety. New types added here are
+// available immediately to /documents/upload and KYC upload.
+const BLOCKED_EXTS = new Set([
+  '.exe', '.bat', '.cmd', '.sh', '.ps1', '.vbs', '.scr', '.com',
+  '.msi', '.app', '.apk', '.jar', '.dll', '.so',
+]);
+
 const fileFilter = (req, file, cb) => {
   try {
-    console.log('=== UPLOAD MIDDLEWARE FILE FILTER ===');
-    console.log('File details:', {
-      originalname: file.originalname,
-      mimetype: file.mimetype,
-      size: file.size
-    });
-    
-    // Allowed MIME types
-    const allowedMimes = [
-      'image/jpeg',
-      'image/jpg', 
-      'image/png',
-      'application/pdf'
-    ];
-
-    // Allowed file extensions
-    const allowedExts = ['.jpg', '.jpeg', '.png', '.pdf'];
-    const ext = path.extname(file.originalname).toLowerCase();
-
-    console.log('Allowed MIME types:', allowedMimes);
-    console.log('File MIME type:', file.mimetype);
-    console.log('Allowed extensions:', allowedExts);
-    console.log('File extension:', ext);
-
-    if (allowedMimes.includes(file.mimetype) && allowedExts.includes(ext)) {
-      console.log('File validation passed');
-      cb(null, true);
-    } else {
-      console.log('File validation failed');
-      cb(new Error(`Invalid file type: ${file.mimetype}. Only JPEG, PNG, and PDF files are allowed.`), false);
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (BLOCKED_EXTS.has(ext)) {
+      return cb(new Error(`File type not allowed for security reasons: ${ext}`), false);
     }
+    cb(null, true);
   } catch (error) {
     console.error('File filter error:', error);
     cb(error, false);
@@ -111,9 +92,9 @@ const uploadConfig = {
   storage,
   fileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-    files: 10 // Maximum 10 files at once
-  }
+    fileSize: 20 * 1024 * 1024, // 20MB — handles scans, multi-page PDFs, slides
+    files: 10,
+  },
 };
 
 // Create upload middleware instances
