@@ -40,11 +40,12 @@ const uploadDocument = async (req, res) => {
       });
     }
 
-    // Validate file size
-    if (req.file && req.file.size > 5 * 1024 * 1024) {
+    // Belt-and-suspenders: multer also caps at 20MB. Keep this in sync if
+    // you change the limit in middleware/upload.js.
+    if (req.file && req.file.size > 20 * 1024 * 1024) {
       return res.status(413).json({
         success: false,
-        message: 'File too large. Maximum size is 5MB.'
+        message: 'File too large. Maximum size is 20MB.'
       });
     }
 
@@ -74,15 +75,10 @@ const uploadDocument = async (req, res) => {
           message: 'Failed to validate booking'
         });
       }
-    } else {
-      // If no booking_id, user must be agent or admin for general uploads
-      if (req.user.role !== 'agent' && req.user.role !== 'super_admin') {
-        return res.status(403).json({
-          success: false,
-          message: 'Only agents and admins can upload general documents'
-        });
-      }
     }
+    // No booking_id is allowed for any authenticated user — the booking
+    // flow uploads supporting docs before the Booking row is created, then
+    // associates them later. Per-row ownership is preserved via uploaded_by.
 
     // Use database transaction for document creation
     const transaction = await Document.sequelize.transaction();
