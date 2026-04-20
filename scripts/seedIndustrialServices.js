@@ -108,9 +108,17 @@ const seedIndustrialServices = async () => {
       password: process.env.DB_PASSWORD || 'Bannu@456',
       database: process.env.DB_NAME || 'flipon_db',
       multipleStatements: false,
+      ssl: process.env.DB_SSL === 'true'
+        ? { minVersion: 'TLSv1.2', rejectUnauthorized: true }
+        : undefined,
     });
 
     console.log('✅ Database connected');
+
+    // TiDB enables NO_BACKSLASH_ESCAPES by default, which rejects `\'` escapes.
+    await connection.query(
+      "SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '')"
+    );
 
     const services = buildServices();
     console.log(`📝 Preparing ${services.length} industrial services…`);

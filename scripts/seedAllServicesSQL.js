@@ -271,17 +271,45 @@ const seedAllServicesSQL = async () => {
 
     // Execute SQL statements
     console.log('Executing SQL statements to add all services...');
-    
-    await sequelize.query(insertServicesSQL, {
-      type: sequelize.QueryTypes.INSERT
-    });
+
+    // The source uses JS-escaped apostrophes (`\'`) inside SQL string literals
+    // — e.g. `'Father\'s Name'`. JS evaluates that to `'Father's Name'`, where
+    // the bare `'` between letters terminates the SQL string early and breaks
+    // TiDB's parser. Fix by doubling any apostrophe that sits between two
+    // letters — that pattern only occurs inside intended-as-content text
+    // (possessives like Father's, Children's), never as a SQL string delimiter.
+    const portableSQL = insertServicesSQL
+      .replace(/([A-Za-z])'([A-Za-z])/g, "$1''$2")
+      // `ON DUPLICATE KEY UPDATE SET ...` is invalid; correct form omits SET.
+      // MySQL tolerates the typo, TiDB doesn't.
+      .replace(/ON DUPLICATE KEY UPDATE\s+SET\s+/gi, 'ON DUPLICATE KEY UPDATE ')
+      // Schema renamed `base_price` → `user_cost` and `estimated_time` →
+      // `expected_timeline`. Legacy seed still uses the old column names.
+      .replace(/\bbase_price\b/g, 'user_cost')
+      .replace(/\bestimated_time\b/g, 'expected_timeline');
+
+    // TiDB disables multi-statement queries by default. Split on `;` and run
+    // each statement separately. Naive split is safe here because no SQL
+    // string literal in this seed contains a semicolon.
+    const statements = portableSQL
+      .split(/;\s*\n/)
+      .map((s) => s.trim())
+      // Skip pieces that contain only blank lines or `--` comments.
+      .filter((s) => s && /[A-Za-z]/.test(s.replace(/--[^\n]*/g, '')));
+
+    let executed = 0;
+    for (const stmt of statements) {
+      await sequelize.query(stmt);
+      executed += 1;
+    }
+    console.log(`Executed ${executed} SQL statements.`);
 
     console.log('\u2705 SQL statements executed successfully!');
     console.log('All services have been added to database with service_type = "consumer"');
 
     // Get final service count
     const finalServices = await Service.findAll({
-      attributes: ['id', 'name', 'category', 'base_price', 'service_type'],
+      attributes: ['id', 'name', 'category', 'user_cost', 'service_type'],
       order: [['category', 'ASC'], ['name', 'ASC']]
     });
 

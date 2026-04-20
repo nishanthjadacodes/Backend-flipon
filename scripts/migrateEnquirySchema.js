@@ -21,6 +21,9 @@ const run = async () => {
       user: process.env.DB_USER || 'root',
       password: process.env.DB_PASSWORD || 'Bannu@456',
       database: process.env.DB_NAME || 'flipon_db',
+      ssl: process.env.DB_SSL === 'true'
+        ? { minVersion: 'TLSv1.2', rejectUnauthorized: true }
+        : undefined,
     });
     console.log('✅ Connected');
 
