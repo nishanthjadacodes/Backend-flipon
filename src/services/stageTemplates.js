@@ -79,6 +79,117 @@ const SPECIFIC_TEMPLATES = [
       { stage_key: 'handover',             label: 'Licence Handed Over', description: 'Licence delivered.' },
     ],
   },
+
+  // ─── Rate-chart aligned templates ────────────────────────────────────
+  {
+    match: (s) => /trade\s*licen[cs]e/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'documents_collected', label: 'Documents Collected',  description: 'NOC, identity proof, and address proof received.' },
+      { stage_key: 'form_filed',          label: 'Application Filed',    description: 'Filed with the municipal / panchayat authority.' },
+      { stage_key: 'scrutiny',            label: 'Scrutiny in Progress', description: 'Ward officer reviewing application.' },
+      { stage_key: 'fee_paid',            label: 'Fee Paid',             description: 'Statutory fee remitted.' },
+      { stage_key: 'licence_issued',      label: 'Licence Issued',       description: 'Trade Licence granted.' },
+      { stage_key: 'handover',            label: 'Licence Delivered',    description: 'Licence handed to you.' },
+    ],
+  },
+  {
+    match: (s) => /msme|udyam/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'aadhaar_verification', label: 'Aadhaar Verification', description: 'Authorised signatory Aadhaar verified on Udyam portal.' },
+      { stage_key: 'details_captured',     label: 'Business Details Captured', description: 'NIC code, turnover, investment details entered.' },
+      { stage_key: 'udyam_generated',      label: 'Udyam Number Issued',  description: 'Udyam Registration Number assigned.' },
+      { stage_key: 'certificate_download', label: 'Certificate Downloaded', description: 'Certificate pulled from portal.' },
+      { stage_key: 'handover',             label: 'Certificate Delivered', description: 'Digital certificate sent to you.' },
+    ],
+  },
+  {
+    match: (s) => /iso\s*\d+|iso\s*certif|iso-?\d+/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'gap_analysis',       label: 'Gap Analysis',            description: 'Current processes vs. ISO standard reviewed.' },
+      { stage_key: 'documentation',      label: 'Documentation Prepared',  description: 'Manual, procedures, and SOPs drafted.' },
+      { stage_key: 'pre_audit',          label: 'Pre-Audit Review',        description: 'Readiness check before the external audit.' },
+      { stage_key: 'external_audit',     label: 'External Audit',          description: 'Accredited body conducts certification audit.' },
+      { stage_key: 'non_conformities',   label: 'Non-Conformities Closed', description: 'Any observations addressed and resubmitted.' },
+      { stage_key: 'certificate_issued', label: 'Certificate Issued',      description: 'ISO certificate granted.' },
+      { stage_key: 'handover',           label: 'Certificate Delivered',   description: 'Digital + printed copy delivered.' },
+    ],
+  },
+  {
+    match: (s) => /\biec\b|import\s*export\s*code/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'dsc_setup',       label: 'DSC Ready',           description: 'Digital Signature Certificate verified (or procured).' },
+      { stage_key: 'form_filed',      label: 'Form ANF-2A Filed',   description: 'Filed on DGFT portal.' },
+      { stage_key: 'fee_paid',        label: 'Fee Paid',            description: 'Statutory fee remitted to DGFT.' },
+      { stage_key: 'officer_review',  label: 'Officer Review',      description: 'DGFT officer reviewing.' },
+      { stage_key: 'iec_generated',   label: 'IEC Number Issued',   description: 'Import-Export Code allotted.' },
+      { stage_key: 'handover',        label: 'IEC Delivered',       description: 'Certificate sent to you.' },
+    ],
+  },
+  {
+    match: (s) => /epf|esic|provident\s*fund/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'inputs_received', label: 'Employee Data Received', description: 'Monthly payroll + joiners/exits received.' },
+      { stage_key: 'challan_prep',    label: 'Challans Prepared',       description: 'EPF + ESIC challans computed.' },
+      { stage_key: 'payment',         label: 'Payment Remitted',        description: 'Challans paid to respective accounts.' },
+      { stage_key: 'ecr_filed',       label: 'ECR Filed',               description: 'Electronic Challan-cum-Return filed.' },
+      { stage_key: 'acknowledgement', label: 'Acknowledgement Received', description: 'TRRN + ESIC receipt obtained.' },
+    ],
+  },
+  {
+    match: (s) => /income\s*tax\s*audit|tax\s*audit/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'book_review',      label: 'Books Reviewed',       description: 'Books of account examined for tax-audit readiness.' },
+      { stage_key: 'audit_report',     label: 'Audit Report Drafted', description: 'Form 3CA/3CB + 3CD prepared.' },
+      { stage_key: 'client_review',    label: 'Client Review',        description: 'Report shared for your sign-off.' },
+      { stage_key: 'form_uploaded',    label: 'Form 3CD Uploaded',    description: 'Filed on Income Tax portal.' },
+      { stage_key: 'client_accepted',  label: 'Client Accepted',      description: 'You accepted the uploaded audit on the portal.' },
+    ],
+  },
+  {
+    match: (s) => /professional\s*tax|\bpt\s*filing|\bpt\s*return/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'data_received', label: 'Payroll Data Received', description: 'Monthly salary slabs received.' },
+      { stage_key: 'challan_prep', label: 'PT Challan Prepared',   description: 'Slab-wise PT computed.' },
+      { stage_key: 'payment',      label: 'Payment Remitted',      description: 'PT paid to state treasury.' },
+      { stage_key: 'return_filed', label: 'Return Filed',          description: 'PT return filed with state commercial tax department.' },
+    ],
+  },
+  {
+    match: (s) => /\bdsc\b|digital\s*signature/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'docs_collected',   label: 'KYC Documents Collected', description: 'Aadhaar, PAN, passport photo received.' },
+      { stage_key: 'video_kyc',        label: 'Video KYC',               description: 'Applicant video verification done.' },
+      { stage_key: 'token_dispatched', label: 'USB Token Dispatched',    description: 'DSC token shipped / ready for pickup.' },
+      { stage_key: 'handover',         label: 'DSC Delivered',           description: 'Token delivered and tested.' },
+    ],
+  },
+  {
+    match: (s) => /gem\s*portal|gem\s*registration/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'primary_registration', label: 'Primary Registration', description: 'GeM account created with PAN.' },
+      { stage_key: 'aadhaar_verification', label: 'Aadhaar eKYC',         description: 'Authorised person Aadhaar-verified.' },
+      { stage_key: 'bank_linkage',         label: 'Bank Account Linked',  description: 'Payout bank account verified.' },
+      { stage_key: 'catalog_ready',        label: 'Catalog Ready',        description: 'Product / service catalog added to seller profile.' },
+      { stage_key: 'handover',             label: 'Seller Portal Ready',  description: 'Credentials + onboarding doc delivered.' },
+    ],
+  },
+  {
+    match: (s) => /safety\s*audit/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'site_visit',       label: 'Site Visit',             description: 'Auditor visits the premises.' },
+      { stage_key: 'checklist',        label: 'Checklist Completed',    description: 'Safety checklist against statutory / ISO norms completed.' },
+      { stage_key: 'findings_report',  label: 'Findings Report Drafted', description: 'Observations + risk ratings drafted.' },
+      { stage_key: 'report_delivered', label: 'Assessment Report Delivered', description: 'Full report sent to you.' },
+    ],
+  },
+  {
+    match: (s) => /labour\s*law|labor\s*law/i.test(s?.name || ''),
+    stages: [
+      { stage_key: 'consultation',     label: 'Consultation Scheduled', description: 'Visit booked with the compliance consultant.' },
+      { stage_key: 'consultation_done', label: 'Consultation Complete', description: 'On-site visit finished; findings noted.' },
+      { stage_key: 'advisory',         label: 'Advisory Shared',        description: 'Written advisory + recommended next steps sent.' },
+    ],
+  },
 ];
 
 export const getStageTemplate = (service) => {

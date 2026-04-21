@@ -30,6 +30,31 @@ const Service = sequelize.define('Service', {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: true
   },
+  // For quote-based (industrial) services: the "starting at" professional
+  // fee shown on the catalog card before a real quote is issued. Renders as
+  // "Starting at ₹5,000" — sets customer expectations so they're not
+  // surprised by the admin's quote. For fixed-price services this is unused.
+  indicative_price_from: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true
+  },
+  indicative_price_to: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true
+  },
+  // Billing unit for the quote — tells the customer up-front that pricing
+  // is "per filing" (GST returns) or "per employee" (EPF/ESIC) rather than
+  // a single one-time fee.
+  //   one_time      — single flat fee (default)
+  //   per_filing    — each monthly/quarterly filing is billed
+  //   per_employee  — pricing scales with headcount
+  //   per_visit     — each consultation visit is billed
+  //   per_report    — per assessment / report (Safety Audit, etc.)
+  pricing_unit: {
+    type: DataTypes.ENUM('one_time', 'per_filing', 'per_employee', 'per_visit', 'per_report'),
+    defaultValue: 'one_time',
+    allowNull: true
+  },
   expected_timeline: {
     type: DataTypes.STRING(100),
     allowNull: true
