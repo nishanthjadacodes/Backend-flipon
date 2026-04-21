@@ -132,7 +132,7 @@ export const listAllEnquiriesForAdmin = async (req, res) => {
       order: [['created_at', 'DESC']],
       include: [
         { model: Service, as: 'service', attributes: ['id', 'name', 'category'] },
-        { model: CompanyProfile, as: 'companyProfile', attributes: ['id', 'legal_name', 'gstin'] },
+        { model: CompanyProfile, as: 'companyProfile', attributes: ['id', 'legal_entity_name', 'brand_name', 'gstin'] },
       ],
       limit: parseInt(limit, 10),
       offset: (parseInt(page, 10) - 1) * parseInt(limit, 10),
