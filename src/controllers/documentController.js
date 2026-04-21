@@ -286,14 +286,7 @@ const deleteDocument = async (req, res) => {
 const verifyDocument = async (req, res) => {
   try {
     const { id } = req.params;
-    const { is_verified, notes } = req.body;
-
-    if (req.user.role !== 'super_admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin access required'
-      });
-    }
+    const { is_verified, status, notes } = req.body;
 
     const document = await Document.findByPk(id);
     if (!document) {
@@ -303,14 +296,20 @@ const verifyDocument = async (req, res) => {
       });
     }
 
-    // Properly parse boolean values from string inputs
-    const parsedIsVerified = parseBoolean(is_verified);
-    
+    // Accept either `is_verified` (legacy) or `status: 'approved' | 'rejected'`
+    // (what the admin panel sends). Rejecting clears the verified timestamp.
+    let approved;
+    if (typeof status === 'string') {
+      approved = status === 'approved' || status === 'verified';
+    } else {
+      approved = parseBoolean(is_verified);
+    }
+
     await document.update({
-      is_verified: parsedIsVerified,
+      is_verified: approved,
       verified_by: req.user.id,
-      verified_at: parsedIsVerified ? new Date() : null,
-      notes: notes || document.notes
+      verified_at: approved ? new Date() : null,
+      notes: notes || document.notes,
     });
 
     const documentWithUrl = {
@@ -318,12 +317,12 @@ const verifyDocument = async (req, res) => {
       file_url: getFileUrl(document.file_url, document.category)
     };
 
-    console.log(`Document ${id} verified by admin ${req.user.id}`);
+    console.log(`Document ${id} ${approved ? 'approved' : 'rejected'} by ${req.user?.role || 'admin'} ${req.user?.id}`);
 
     res.json({
       success: true,
       data: documentWithUrl,
-      message: `Document ${is_verified ? 'verified' : 'unverified'} successfully`
+      message: `Document ${approved ? 'approved' : 'rejected'} successfully`
     });
   } catch (error) {
     console.error('Error verifying document:', error);
@@ -334,10 +333,52 @@ const verifyDocument = async (req, res) => {
   }
 };
 
+// List documents awaiting admin review. Accepts optional filters:
+//   ?status=pending|approved        (default: pending)
+//   ?booking_id=<uuid>               (restrict to a single booking)
+//   ?category=booking|kyc|application
+//   ?limit / ?page
+const listPendingDocuments = async (req, res) => {
+  try {
+    const { status = 'pending', booking_id, category, limit = 50, page = 1 } = req.query;
+    const where = {};
+    if (status === 'pending') where.is_verified = false;
+    if (status === 'approved' || status === 'verified') where.is_verified = true;
+    if (booking_id) where.booking_id = booking_id;
+    if (category) where.category = category;
+
+    const rows = await Document.findAndCountAll({
+      where,
+      order: [['uploaded_at', 'DESC']],
+      limit: parseInt(limit, 10),
+      offset: (parseInt(page, 10) - 1) * parseInt(limit, 10),
+    });
+
+    const data = rows.rows.map((d) => ({
+      ...d.toJSON(),
+      file_url: getFileUrl(d.file_url, d.category),
+    }));
+
+    res.json({
+      success: true,
+      data,
+      pagination: {
+        page: parseInt(page, 10),
+        limit: parseInt(limit, 10),
+        total: rows.count,
+      },
+    });
+  } catch (error) {
+    console.error('Error listing documents:', error);
+    res.status(500).json({ success: false, message: 'Failed to list documents' });
+  }
+};
+
 export {
   uploadDocument,
   getBookingDocuments,
   getMyKycDocuments,
   deleteDocument,
-  verifyDocument
+  verifyDocument,
+  listPendingDocuments,
 };

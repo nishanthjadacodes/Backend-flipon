@@ -331,6 +331,77 @@ const assignAgent = async (req, res) => {
   }
 };
 
+// Reschedule a booking — Operations Manager grant per PDF. Accepts
+// preferred_date and/or preferred_time, plus an optional reason that gets
+// folded into the booking notes so the audit trail captures why.
+const rescheduleBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { preferred_date, preferred_time, reason } = req.body || {};
+
+    if (!preferred_date && !preferred_time) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide preferred_date and/or preferred_time to reschedule',
+      });
+    }
+
+    const booking = await Booking.findByPk(id);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+    if (['completed', 'cancelled'].includes(booking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot reschedule a ${booking.status} booking`,
+      });
+    }
+
+    const updates = {};
+    if (preferred_date) updates.preferred_date = preferred_date;
+    if (preferred_time) updates.preferred_time = preferred_time;
+    if (reason) {
+      const prev = booking.notes ? `${booking.notes}\n` : '';
+      updates.notes = `${prev}[reschedule ${new Date().toISOString()}] ${reason}`;
+    }
+
+    await booking.update(updates);
+    res.json({ success: true, data: booking, message: 'Booking rescheduled' });
+  } catch (error) {
+    console.error('Error rescheduling booking:', error);
+    res.status(500).json({ success: false, message: 'Failed to reschedule booking' });
+  }
+};
+
+// Cancel a booking — Operations Manager grant per PDF.
+const cancelBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+
+    const booking = await Booking.findByPk(id);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+    if (booking.status === 'completed') {
+      return res.status(400).json({ success: false, message: 'Completed bookings cannot be cancelled' });
+    }
+    if (booking.status === 'cancelled') {
+      return res.json({ success: true, data: booking, message: 'Booking was already cancelled' });
+    }
+
+    await booking.update({
+      status: 'cancelled',
+      cancelled_at: new Date(),
+      cancellation_reason: reason || 'Cancelled by admin',
+    });
+    res.json({ success: true, data: booking, message: 'Booking cancelled' });
+  } catch (error) {
+    console.error('Error cancelling booking:', error);
+    res.status(500).json({ success: false, message: 'Failed to cancel booking' });
+  }
+};
+
 const getAvailableAgents = async (req, res) => {
   try {
     const agents = await User.findAll({
@@ -370,5 +441,7 @@ export {
   // Booking Management
   getAllBookings,
   assignAgent,
+  rescheduleBooking,
+  cancelBooking,
   getAvailableAgents
 };

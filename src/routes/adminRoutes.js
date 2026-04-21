@@ -9,6 +9,8 @@ import {
   getDashboardStats,
   getAllBookings,
   assignAgent,
+  rescheduleBooking,
+  cancelBooking,
   getAvailableAgents,
 } from '../controllers/adminController.js';
 import {
@@ -72,6 +74,8 @@ router.delete('/admins/:id', requirePermission(PERMISSIONS.USER_DEACTIVATE), dea
 // Bookings
 router.get('/bookings', requirePermission(PERMISSIONS.BOOKING_VIEW), getAllBookings);
 router.post('/bookings/assign-agent', requirePermission(PERMISSIONS.BOOKING_ASSIGN), assignAgent);
+router.put('/bookings/:id/reschedule', requirePermission(PERMISSIONS.BOOKING_RESCHEDULE), rescheduleBooking);
+router.put('/bookings/:id/cancel', requirePermission(PERMISSIONS.BOOKING_CANCEL), cancelBooking);
 
 // Agents
 router.get('/agents/available', requirePermission(PERMISSIONS.AGENT_VIEW), getAvailableAgents);
