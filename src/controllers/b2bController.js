@@ -1,5 +1,5 @@
 import { Op } from 'sequelize';
-import { Booking, User, Service, AuditLog } from '../models/index.js';
+import { Booking, Enquiry, CompanyProfile, User, Service, AuditLog } from '../models/index.js';
 import { sendPushNotification } from '../services/notificationService.js';
 import { getIoInstance } from '../config/socket.js';
 
@@ -11,21 +11,46 @@ const MILESTONE_LABELS = {
   noc_issued: 'NOC Issued',
 };
 
-// B2B pipeline = industrial bookings shown grouped by status stage.
-// Stages map to Booking.status: pending → assigned → accepted → documents_collected → submitted → completed.
-// Additional surface: NOC status is tracked via Booking.submission_details JSON.
+// B2B pipeline = industrial enquiries + industrial bookings grouped by stage.
+//
+// Customers first create an Enquiry (pending → quoted → accepted), then an
+// accepted enquiry converts into a Booking (booking_type='industrial') which
+// drives the milestone flow. Both lifecycles feed the same kanban so B2B
+// Admin can work the case from first submission through NOC issuance.
+//
+// Stages:
+//   application_submitted → enquiries in pending/quoted + bookings not yet moved
+//   under_review          → accepted enquiries / bookings in assigned|accepted|documents_collected
+//   inspection            → bookings with submission_details.inspection_at set
+//   noc_issued            → bookings with submission_details.noc_status === 'issued'
+//   completed             → booking.status === 'completed'
+//   cancelled             → booking/enquiry cancelled|rejected
 export const b2bPipeline = async (req, res) => {
   try {
-    const rows = await Booking.findAll({
-      where: { booking_type: 'industrial' },
-      include: [
-        { model: Service, as: 'service', attributes: ['id', 'name', 'category'] },
-        { model: User, as: 'agent', attributes: ['id', 'name'] },
-        { model: User, as: 'customer', attributes: ['id', 'name', 'email'] },
-      ],
-      order: [['created_at', 'DESC']],
-      limit: 500,
-    });
+    const [bookings, enquiries] = await Promise.all([
+      Booking.findAll({
+        where: { booking_type: 'industrial' },
+        include: [
+          { model: Service, as: 'service', attributes: ['id', 'name', 'category'] },
+          { model: User, as: 'agent', attributes: ['id', 'name'] },
+          { model: User, as: 'customer', attributes: ['id', 'name', 'email'] },
+        ],
+        order: [['created_at', 'DESC']],
+        limit: 500,
+      }),
+      Enquiry.findAll({
+        // Only surface enquiries that are still "open" — accepted ones spawn
+        // a booking which takes over, so dropping them here avoids duplicates.
+        where: { status: { [Op.in]: ['pending', 'quoted', 'rejected'] } },
+        include: [
+          { model: Service, as: 'service', attributes: ['id', 'name', 'category'] },
+          { model: User, as: 'customer', attributes: ['id', 'name', 'email'] },
+          { model: CompanyProfile, as: 'companyProfile', attributes: ['id', 'legal_entity_name', 'brand_name', 'gstin'] },
+        ],
+        order: [['created_at', 'DESC']],
+        limit: 500,
+      }),
+    ]);
 
     const stages = {
       application_submitted: [],
@@ -36,14 +61,35 @@ export const b2bPipeline = async (req, res) => {
       cancelled: [],
     };
 
-    rows.forEach((b) => {
+    // Normalise enquiry rows to a "card" shape the frontend can render
+    // alongside booking cards. Marked with kind:'enquiry' so the UI can
+    // show a distinct badge + quote/accept actions.
+    enquiries.forEach((e) => {
+      const card = {
+        kind: 'enquiry',
+        id: e.id,
+        status: e.status,
+        created_at: e.created_at,
+        price_quoted: e.quote_service_fee || null,
+        service: e.service,
+        customer: e.customer,
+        company: e.companyProfile,
+        urgency: e.urgency,
+      };
+      if (e.status === 'rejected') stages.cancelled.push(card);
+      else stages.application_submitted.push(card);
+    });
+
+    // Booking cards — same existing logic, tagged kind:'booking' for the UI.
+    bookings.forEach((b) => {
       const sd = b.submission_details || {};
-      if (b.status === 'completed') stages.completed.push(b);
-      else if (b.status === 'cancelled') stages.cancelled.push(b);
-      else if (sd.noc_status === 'issued') stages.noc_issued.push(b);
-      else if (sd.inspection_at) stages.inspection.push(b);
-      else if (['assigned', 'accepted', 'documents_collected'].includes(b.status)) stages.under_review.push(b);
-      else stages.application_submitted.push(b);
+      const card = Object.assign({ kind: 'booking' }, b.toJSON());
+      if (b.status === 'completed') stages.completed.push(card);
+      else if (b.status === 'cancelled') stages.cancelled.push(card);
+      else if (sd.noc_status === 'issued') stages.noc_issued.push(card);
+      else if (sd.inspection_at) stages.inspection.push(card);
+      else if (['assigned', 'accepted', 'documents_collected'].includes(b.status)) stages.under_review.push(card);
+      else stages.application_submitted.push(card);
     });
 
     res.json({ success: true, data: stages });
