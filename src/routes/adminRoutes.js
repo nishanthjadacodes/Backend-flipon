@@ -26,6 +26,7 @@ import {
   listPayouts, createPayout, updatePayoutStatus, payoutStats,
 } from '../controllers/payoutsController.js';
 import { listAuditLogs } from '../controllers/auditController.js';
+import { getConfig, updateConfig } from '../controllers/platformConfigController.js';
 import { b2bPipeline, updateMilestone } from '../controllers/b2bController.js';
 import {
   listAdmins, createAdmin, updateAdmin, deactivateAdmin,
@@ -90,6 +91,11 @@ router.put('/payouts/:id/status', requirePermission(PERMISSIONS.PAYOUT_APPROVE),
 
 // Audit logs (Super Admin only — gate via AUDIT_LOGS_VIEW)
 router.get('/audit-logs', requirePermission(PERMISSIONS.AUDIT_LOGS_VIEW), listAuditLogs);
+
+// Financial configuration (payment gateway, tax %, royalty %, commissions).
+// Super Admin only — gate via FINANCIAL_CONFIG.
+router.get('/config', requirePermission(PERMISSIONS.FINANCIAL_CONFIG), getConfig);
+router.put('/config', requirePermission(PERMISSIONS.FINANCIAL_CONFIG), updateConfig);
 
 // B2B / Industrial pipeline
 router.get('/b2b/pipeline', requirePermission(PERMISSIONS.B2B_PIPELINE), b2bPipeline);

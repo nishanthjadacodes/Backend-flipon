@@ -14,6 +14,7 @@ import Enquiry from './Enquiry.js';
 import EnquiryStage from './EnquiryStage.js';
 import VaultDocument from './VaultDocument.js';
 import VaultAccessLog from './VaultAccessLog.js';
+import PlatformConfig from './PlatformConfig.js';
 
 // Define associations
 User.hasMany(Booking, { foreignKey: 'customer_id', as: 'customerBookings' });
@@ -108,6 +109,7 @@ const syncModels = async () => {
     await EnquiryStage.sync();
     await VaultDocument.sync();
     await VaultAccessLog.sync();
+    await PlatformConfig.sync();
     console.log('Database models synchronized successfully.');
   } catch (error) {
     console.error('Error synchronizing database models:', error);
@@ -131,6 +133,7 @@ export {
   EnquiryStage,
   VaultDocument,
   VaultAccessLog,
+  PlatformConfig,
   sequelize,
   syncModels
 };
