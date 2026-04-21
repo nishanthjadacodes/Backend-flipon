@@ -226,11 +226,13 @@ const getDashboardStats = async (req, res) => {
 // Booking Management for Admin
 const getAllBookings = async (req, res) => {
   try {
-    const { status, booking_type, page = 1, limit = 10 } = req.query;
-    
+    const { status, booking_type, customer_id, agent_id, page = 1, limit = 10 } = req.query;
+
     const whereClause = {};
     if (status) whereClause.status = status;
     if (booking_type) whereClause.booking_type = booking_type;
+    if (customer_id) whereClause.customer_id = customer_id;
+    if (agent_id) whereClause.agent_id = agent_id;
 
     const bookings = await Booking.findAndCountAll({
       where: whereClause,
