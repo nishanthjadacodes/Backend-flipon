@@ -165,7 +165,11 @@ app.get('/health', (req, res) => {
     status: 'OK',
     message: 'FlipOn Digital API is running',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    // Diagnostic: shows whether the admin-panel-open dev flag is active. Safe
+    // to expose — this only reveals the boolean, not any secret.
+    adminDevOpen: String(process.env.ADMIN_DEV_OPEN || '').toLowerCase() === 'true',
+    commit: process.env.RENDER_GIT_COMMIT || null,
   });
 });
 
