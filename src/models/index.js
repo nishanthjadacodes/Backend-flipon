@@ -16,6 +16,7 @@ import VaultDocument from './VaultDocument.js';
 import VaultAccessLog from './VaultAccessLog.js';
 import PlatformConfig from './PlatformConfig.js';
 import Royalty from './Royalty.js';
+import TicketMessage from './TicketMessage.js';
 
 // Define associations
 User.hasMany(Booking, { foreignKey: 'customer_id', as: 'customerBookings' });
@@ -57,6 +58,8 @@ Ticket.belongsTo(User, { foreignKey: 'customer_id', as: 'customer' });
 Ticket.belongsTo(User, { foreignKey: 'assigned_to', as: 'assignee' });
 Ticket.belongsTo(User, { foreignKey: 'created_by', as: 'creator' });
 Ticket.belongsTo(Booking, { foreignKey: 'booking_id', as: 'booking' });
+Ticket.hasMany(TicketMessage, { foreignKey: 'ticket_id', as: 'messages' });
+TicketMessage.belongsTo(Ticket, { foreignKey: 'ticket_id', as: 'ticket' });
 
 // Payout associations
 Payout.belongsTo(User, { foreignKey: 'agent_id', as: 'agent' });
@@ -112,6 +115,7 @@ const syncModels = async () => {
     await VaultAccessLog.sync();
     await PlatformConfig.sync();
     await Royalty.sync();
+    await TicketMessage.sync();
     console.log('Database models synchronized successfully.');
   } catch (error) {
     console.error('Error synchronizing database models:', error);
@@ -137,6 +141,7 @@ export {
   VaultAccessLog,
   PlatformConfig,
   Royalty,
+  TicketMessage,
   sequelize,
   syncModels
 };

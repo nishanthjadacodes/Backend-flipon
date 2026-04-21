@@ -1,5 +1,7 @@
 import { Op } from 'sequelize';
-import { Ticket, User, Booking, AuditLog } from '../models/index.js';
+import { Ticket, TicketMessage, User, Booking, AuditLog } from '../models/index.js';
+import { sendPushNotification } from '../services/notificationService.js';
+import { getIoInstance } from '../config/socket.js';
 
 const includes = [
   { model: User, as: 'customer', attributes: ['id', 'name', 'mobile', 'email'] },
@@ -76,6 +78,84 @@ export const updateTicket = async (req, res) => {
   } catch (err) {
     console.error('updateTicket error:', err);
     res.status(500).json({ success: false, message: 'Failed to update ticket' });
+  }
+};
+
+// GET /api/admin/tickets/:id/messages
+// Returns the full chronological thread for a ticket.
+export const listTicketMessages = async (req, res) => {
+  try {
+    const ticket = await Ticket.findByPk(req.params.id);
+    if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
+    const messages = await TicketMessage.findAll({
+      where: { ticket_id: ticket.id },
+      order: [['created_at', 'ASC']],
+    });
+    res.json({ success: true, data: messages });
+  } catch (err) {
+    console.error('listTicketMessages error:', err);
+    res.status(500).json({ success: false, message: 'Failed to load messages' });
+  }
+};
+
+// POST /api/admin/tickets/:id/messages  { body }
+// Admin sends a chat message on the ticket thread. Triggers an Expo push
+// notification to the linked customer so they see it in-app immediately,
+// and broadcasts a socket event to any connected clients in user_<customer_id>.
+export const sendTicketMessage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { body } = req.body || {};
+    if (!body || !String(body).trim()) {
+      return res.status(400).json({ success: false, message: 'Message body is required' });
+    }
+    const ticket = await Ticket.findByPk(id, { include: [{ model: User, as: 'customer' }] });
+    if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
+
+    const msg = await TicketMessage.create({
+      ticket_id: ticket.id,
+      sender_id: req.user?.id || null,
+      sender_role: req.user?.role || 'support',
+      sender_name: req.user?.name || 'Support',
+      body: String(body).trim(),
+      channel: 'chat',
+    });
+
+    // Socket push for live chat UIs.
+    try {
+      const io = getIoInstance();
+      if (io && ticket.customer_id) {
+        io.to(`user_${ticket.customer_id}`).emit('ticket_message', {
+          ticketId: ticket.id,
+          message: msg,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.warn('[ticket_message] socket emit failed:', e?.message);
+    }
+
+    // Out-of-band notification for offline / backgrounded customer app.
+    if (ticket.customer_id) {
+      sendPushNotification(ticket.customer_id, {
+        title: `Support · ${ticket.subject}`,
+        message: String(body).trim().slice(0, 140),
+        data: { type: 'ticket_message', ticketId: ticket.id },
+        priority: 'high',
+      }).catch((e) => console.warn('[ticket_message] push failed:', e?.message));
+    }
+
+    await AuditLog.record({
+      actor: req.user,
+      action: 'ticket.message.send',
+      resource_type: 'ticket',
+      resource_id: ticket.id,
+    });
+
+    res.status(201).json({ success: true, data: msg });
+  } catch (err) {
+    console.error('sendTicketMessage error:', err);
+    res.status(500).json({ success: false, message: 'Failed to send message' });
   }
 };
 

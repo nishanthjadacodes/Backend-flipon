@@ -19,10 +19,12 @@ import {
   revenueReport,
   agentPerformance,
   serviceDemand,
+  zoneDemand,
   pendingDocumentation,
 } from '../controllers/reportsController.js';
 import {
   listTickets, getTicket, createTicket, updateTicket, ticketStats,
+  listTicketMessages, sendTicketMessage,
 } from '../controllers/ticketsController.js';
 import {
   listPayouts, createPayout, updatePayoutStatus, payoutStats,
@@ -57,6 +59,7 @@ router.get('/reports/operational', requirePermission(PERMISSIONS.REPORTS_VIEW), 
 router.get('/reports/revenue', requirePermission(PERMISSIONS.REVENUE_VIEW), revenueReport);
 router.get('/reports/agents', requirePermission(PERMISSIONS.AGENT_VIEW), agentPerformance);
 router.get('/reports/service-demand', requirePermission(PERMISSIONS.REPORTS_VIEW), serviceDemand);
+router.get('/reports/zones', requirePermission(PERMISSIONS.REPORTS_VIEW), zoneDemand);
 router.get('/reports/pending-documentation', requirePermission(PERMISSIONS.DOCUMENT_VIEW), pendingDocumentation);
 
 // Service management
@@ -90,6 +93,8 @@ router.get('/tickets/stats', requirePermission(PERMISSIONS.TICKETS_VIEW), ticket
 router.get('/tickets/:id', requirePermission(PERMISSIONS.TICKETS_VIEW), getTicket);
 router.post('/tickets', requirePermission(PERMISSIONS.TICKETS_MANAGE), createTicket);
 router.put('/tickets/:id', requirePermission(PERMISSIONS.TICKETS_MANAGE), updateTicket);
+router.get('/tickets/:id/messages', requirePermission(PERMISSIONS.TICKETS_VIEW), listTicketMessages);
+router.post('/tickets/:id/messages', requirePermission(PERMISSIONS.TICKETS_MANAGE), sendTicketMessage);
 
 // Payouts (Finance)
 router.get('/payouts', requirePermission(PERMISSIONS.WALLET_MANAGE), listPayouts);
