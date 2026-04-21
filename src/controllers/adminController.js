@@ -1,4 +1,6 @@
 import { Service, User, Booking } from '../models/index.js';
+import { getIoInstance } from '../config/socket.js';
+import { sendPushNotification } from '../services/notificationService.js';
 
 // Service Management
 const getAllServices = async (req, res) => {
@@ -317,10 +319,47 @@ const assignAgent = async (req, res) => {
       assigned_at: new Date()
     });
 
+    // Load the booking with its service so the notification payload is rich
+    // enough for the agent app to render a useful preview.
+    const hydrated = await Booking.findByPk(booking.id, {
+      include: [
+        { model: Service, as: 'service', attributes: ['id', 'name', 'category'] },
+        { model: User, as: 'customer', attributes: ['id', 'name', 'mobile'] },
+      ],
+    });
+
+    // Real-time notification to the assigned agent's personal socket room,
+    // plus an Expo push notification for offline / background delivery.
+    try {
+      const io = getIoInstance();
+      if (io) {
+        io.to(`user_${agentId}`).emit('task_assigned', {
+          bookingId: hydrated.id,
+          serviceName: hydrated?.service?.name || 'Service',
+          customerName: hydrated?.customer?.name || 'Customer',
+          customerMobile: hydrated?.customer?.mobile || null,
+          address: hydrated?.service_address || null,
+          preferredDate: hydrated?.preferred_date || null,
+          preferredTime: hydrated?.preferred_time || null,
+          message: 'A new task has been assigned to you. Open the app to accept or reject.',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.warn('[assignAgent] socket notify failed:', e?.message);
+    }
+
+    sendPushNotification(agentId, {
+      title: 'New task assigned',
+      message: `${hydrated?.service?.name || 'Service'} — ${hydrated?.customer?.name || 'Customer'}`,
+      data: { type: 'task_assigned', bookingId: hydrated.id },
+      priority: 'high',
+    }).catch((e) => console.warn('[assignAgent] push notify failed:', e?.message));
+
     res.json({
       success: true,
-      data: booking,
-      message: 'Agent assigned successfully'
+      data: hydrated,
+      message: 'Agent assigned successfully',
     });
   } catch (error) {
     console.error('Error assigning agent:', error);

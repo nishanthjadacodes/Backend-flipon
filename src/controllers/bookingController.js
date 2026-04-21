@@ -727,85 +727,123 @@ const uploadDocument = async (req, res) => {
 };
 
 // Accept task (agent)
+// Agent confirms a task the admin has already assigned to them.
+// Accept is NOT self-service anymore — admin must assign first. Gate:
+//   booking.agent_id === req.user.id  AND  booking.status === 'assigned'
+// Transition: assigned → accepted.
 const acceptTask = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const booking = await Booking.findByPk(id);
-    
     if (!booking) {
-      return res.status(404).json({
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+    if (!booking.agent_id || booking.agent_id !== req.user.id) {
+      return res.status(403).json({
         success: false,
-        message: 'Task not found'
+        message: 'This task is not assigned to you. Wait for the admin to assign it before accepting.',
       });
     }
-    
-    if (booking.status !== 'pending') {
+    if (booking.status !== 'assigned') {
       return res.status(400).json({
         success: false,
-        message: 'Task can only be accepted when in pending status'
+        message: `Cannot accept a booking in "${booking.status}" status (must be "assigned").`,
       });
     }
-    
+
     await booking.update({
-      agent_id: req.user.id,
-      status: 'assigned',
-      assigned_at: new Date()
+      status: 'accepted',
+      accepted_at: new Date(),
     });
-    
-    res.json({
-      success: true,
-      message: 'Task accepted successfully',
-      task: booking
-    });
+
+    // Notify the customer that their agent has confirmed.
+    try {
+      const io = getIoInstance();
+      if (io) {
+        io.to(`user_${booking.customer_id}`).emit('booking_update_notification', {
+          bookingId: booking.id,
+          status: 'accepted',
+          message: 'Your agent has accepted the assignment',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.warn('[acceptTask] socket notify failed:', e?.message);
+    }
+
+    res.json({ success: true, message: 'Task accepted', task: booking });
   } catch (error) {
     console.error('Error accepting task:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to accept task'
-    });
+    res.status(500).json({ success: false, message: 'Failed to accept task' });
   }
 };
 
-// Reject task (agent)
+// Agent rejects a task the admin assigned to them. Instead of cancelling
+// the whole booking, it bounces back into the admin's queue so they can
+// reassign to someone else.
 const rejectTask = async (req, res) => {
   try {
     const { id } = req.params;
-    const { reason } = req.body;
-    
+    const { reason } = req.body || {};
+
     const booking = await Booking.findByPk(id);
-    
     if (!booking) {
-      return res.status(404).json({
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+    if (!booking.agent_id || booking.agent_id !== req.user.id) {
+      return res.status(403).json({
         success: false,
-        message: 'Task not found'
+        message: 'This task is not assigned to you.',
       });
     }
-    
-    if (booking.status !== 'pending') {
+    if (!['assigned', 'accepted'].includes(booking.status)) {
       return res.status(400).json({
         success: false,
-        message: 'Task can only be rejected when in pending status'
+        message: `Cannot reject a booking in "${booking.status}" status.`,
       });
     }
-    
+
+    const previousNotes = booking.agent_notes ? `${booking.agent_notes}\n` : '';
+    const rejectionNote = `[rejected ${new Date().toISOString()}] ${reason || 'no reason provided'}`;
+
     await booking.update({
-      status: 'cancelled',
-      cancelled_at: new Date(),
-      cancellation_reason: reason || 'Agent rejected the task'
+      agent_id: null,
+      status: 'pending',
+      assigned_at: null,
+      accepted_at: null,
+      agent_notes: previousNotes + rejectionNote,
     });
-    
+
+    // Notify the admin role room so the assignment dashboard can surface the bounce.
+    try {
+      const io = getIoInstance();
+      if (io) {
+        io.to('role_super_admin').emit('assignment_rejected', {
+          bookingId: booking.id,
+          agentId: req.user.id,
+          reason: reason || null,
+          timestamp: new Date().toISOString(),
+        });
+        io.to('role_operations_manager').emit('assignment_rejected', {
+          bookingId: booking.id,
+          agentId: req.user.id,
+          reason: reason || null,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.warn('[rejectTask] socket notify failed:', e?.message);
+    }
+
     res.json({
       success: true,
-      message: 'Task rejected successfully',
-      task: booking
+      message: 'Task returned to admin pool for reassignment',
+      task: booking,
     });
   } catch (error) {
     console.error('Error rejecting task:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to reject task'
-    });
+    res.status(500).json({ success: false, message: 'Failed to reject task' });
   }
 };
 
@@ -815,25 +853,23 @@ const getAgentTasks = async (req, res) => {
   try {
     const { status, page = 1, limit = 50 } = req.query;
 
-    // Map AgentApp status names back to backend DB statuses
+    // Map AgentApp status names back to backend DB statuses. Agents no
+    // longer self-pick pending work — admin assigns first. 'new' now means
+    // "admin assigned it to me, awaiting my accept".
     const mapStatusToDb = (s) => {
       switch (s) {
-        case 'new':         return ['pending'];
-        case 'accepted':    return ['assigned', 'accepted'];
-        case 'in_progress': return ['documents_collected', 'submitted'];
+        case 'new':         return ['assigned'];
+        case 'accepted':    return ['accepted'];
+        case 'in_progress': return ['documents_collected', 'submitted', 'in_progress'];
         case 'completed':   return ['completed'];
         case 'cancelled':   return ['cancelled'];
         default:            return null; // 'all' or unknown → no filter
       }
     };
 
-    // Base: this agent's tasks + all unassigned pending bookings
-    const whereClause = {
-      [Op.or]: [
-        { agent_id: req.user.id },
-        { agent_id: null, status: 'pending' },
-      ]
-    };
+    // Only show this agent's own assignments. Unassigned bookings stay in
+    // the admin pool until an admin explicitly assigns them.
+    const whereClause = { agent_id: req.user.id };
 
     // Apply status filter (if not 'all')
     const dbStatuses = status ? mapStatusToDb(status) : null;
@@ -861,17 +897,18 @@ const getAgentTasks = async (req, res) => {
     });
 
     // Transform data for React Native AgentApp
-    // Map backend statuses → AgentApp statuses
+    // Map backend statuses → AgentApp statuses. 'assigned' = admin just
+    // assigned, agent still needs to accept. 'accepted' = agent confirmed
+    // and is now executing.
     const mapStatus = (s) => {
       switch (s) {
-        case 'pending': return 'new';
-        case 'assigned':
-        case 'accepted': return 'accepted';
+        case 'assigned':  return 'new';         // "new" in agent UI = admin-assigned awaiting accept
+        case 'accepted':  return 'accepted';    // agent confirmed
         case 'documents_collected':
         case 'submitted': return 'in_progress';
         case 'completed': return 'completed';
         case 'cancelled': return 'cancelled';
-        default: return s;
+        default:          return s;
       }
     };
 
