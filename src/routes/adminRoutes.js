@@ -27,6 +27,9 @@ import {
 import {
   listPayouts, createPayout, updatePayoutStatus, payoutStats,
 } from '../controllers/payoutsController.js';
+import {
+  listRoyalties, royaltySummary, generateRoyalty, updateRoyaltyStatus, addCommissionEntries,
+} from '../controllers/royaltyController.js';
 import { listAuditLogs } from '../controllers/auditController.js';
 import { getConfig, updateConfig } from '../controllers/platformConfigController.js';
 import { b2bPipeline, updateMilestone } from '../controllers/b2bController.js';
@@ -93,6 +96,13 @@ router.get('/payouts', requirePermission(PERMISSIONS.WALLET_MANAGE), listPayouts
 router.get('/payouts/stats', requirePermission(PERMISSIONS.WALLET_MANAGE), payoutStats);
 router.post('/payouts', requirePermission(PERMISSIONS.WALLET_MANAGE), createPayout);
 router.put('/payouts/:id/status', requirePermission(PERMISSIONS.PAYOUT_APPROVE), updatePayoutStatus);
+
+// Royalty (Finance) — 2% monthly royalty + team commissions per PDF.
+router.get('/royalty', requirePermission(PERMISSIONS.ROYALTY_APPROVE), listRoyalties);
+router.get('/royalty/summary', requirePermission(PERMISSIONS.ROYALTY_APPROVE), royaltySummary);
+router.post('/royalty/generate', requirePermission(PERMISSIONS.ROYALTY_APPROVE), generateRoyalty);
+router.post('/royalty/commissions', requirePermission(PERMISSIONS.ROYALTY_APPROVE), addCommissionEntries);
+router.put('/royalty/:id/status', requirePermission(PERMISSIONS.ROYALTY_APPROVE), updateRoyaltyStatus);
 
 // Audit logs (Super Admin only — gate via AUDIT_LOGS_VIEW)
 router.get('/audit-logs', requirePermission(PERMISSIONS.AUDIT_LOGS_VIEW), listAuditLogs);
