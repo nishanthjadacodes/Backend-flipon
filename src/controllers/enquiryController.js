@@ -117,6 +117,98 @@ export const getMyEnquiries = async (req, res) => {
   }
 };
 
+// ─── POST /api/admin/enquiries/:id/quote ────────────────────────────────────
+// B2B / Super Admin issues the quote. Transitions enquiry pending → quoted
+// and fires an Expo push to the customer so they see it in-app immediately.
+export const issueQuoteAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      service_fee,
+      govt_fees = 0,
+      cycle = 'one_time',
+      valid_until,     // ISO date string
+      terms,
+    } = req.body || {};
+
+    if (service_fee === undefined || service_fee === null || Number.isNaN(Number(service_fee))) {
+      return res.status(400).json({ success: false, message: 'service_fee (number) is required' });
+    }
+    if (!['one_time', 'monthly', 'quarterly', 'half_yearly', 'annual'].includes(cycle)) {
+      return res.status(400).json({ success: false, message: 'Invalid cycle' });
+    }
+
+    const enquiry = await Enquiry.findByPk(id);
+    if (!enquiry) return res.status(404).json({ success: false, message: 'Enquiry not found' });
+    if (!['pending', 'quoted'].includes(enquiry.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot issue quote for enquiry in "${enquiry.status}" status`,
+      });
+    }
+
+    await enquiry.update({
+      quote_service_fee: Number(service_fee),
+      quote_govt_fees: Number(govt_fees) || 0,
+      quote_cycle: cycle,
+      quote_valid_until: valid_until ? new Date(valid_until) : null,
+      quote_terms: terms || null,
+      quote_issued_at: new Date(),
+      assigned_admin_id: req.user?.id || null,
+      status: 'quoted',
+    });
+
+    notifyCustomerAsync(
+      enquiry.customer_id,
+      'Quote received',
+      `Your industrial enquiry has been quoted. Open the app to review and accept.`,
+      { type: 'enquiry_quoted', enquiryId: enquiry.id }
+    );
+
+    res.json({ success: true, data: enquiry, message: 'Quote issued' });
+  } catch (error) {
+    console.error('issueQuoteAdmin error:', error);
+    res.status(500).json({ success: false, message: 'Failed to issue quote' });
+  }
+};
+
+// ─── POST /api/admin/enquiries/:id/reject ───────────────────────────────────
+// Admin declines to serve the enquiry (outside scope, compliance block, etc.).
+export const rejectEnquiryAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+
+    const enquiry = await Enquiry.findByPk(id);
+    if (!enquiry) return res.status(404).json({ success: false, message: 'Enquiry not found' });
+    if (['accepted', 'in_progress', 'completed'].includes(enquiry.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot reject an enquiry already in "${enquiry.status}" status`,
+      });
+    }
+
+    await enquiry.update({
+      status: 'rejected',
+      quote_terms: reason ? `Rejected: ${reason}` : 'Rejected by admin',
+      responded_at: new Date(),
+      assigned_admin_id: req.user?.id || null,
+    });
+
+    notifyCustomerAsync(
+      enquiry.customer_id,
+      'Enquiry declined',
+      reason ? `Your enquiry was declined: ${reason}` : 'Your enquiry was declined by the team.',
+      { type: 'enquiry_rejected', enquiryId: enquiry.id }
+    );
+
+    res.json({ success: true, data: enquiry, message: 'Enquiry rejected' });
+  } catch (error) {
+    console.error('rejectEnquiryAdmin error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reject enquiry' });
+  }
+};
+
 // ─── GET /api/admin/enquiries ───────────────────────────────────────────────
 // Admin-scoped listing — every enquiry across the platform. Used by the
 // B2B/Industrial Admin panel to surface enquiries for pipeline + vault work.
