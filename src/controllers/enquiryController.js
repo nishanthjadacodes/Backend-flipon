@@ -117,6 +117,42 @@ export const getMyEnquiries = async (req, res) => {
   }
 };
 
+// ─── GET /api/admin/enquiries ───────────────────────────────────────────────
+// Admin-scoped listing — every enquiry across the platform. Used by the
+// B2B/Industrial Admin panel to surface enquiries for pipeline + vault work.
+export const listAllEnquiriesForAdmin = async (req, res) => {
+  try {
+    const { status, urgency, limit = 200, page = 1 } = req.query;
+    const where = {};
+    if (status) where.status = status;
+    if (urgency) where.urgency = urgency;
+
+    const enquiries = await Enquiry.findAndCountAll({
+      where,
+      order: [['created_at', 'DESC']],
+      include: [
+        { model: Service, as: 'service', attributes: ['id', 'name', 'category'] },
+        { model: CompanyProfile, as: 'companyProfile', attributes: ['id', 'legal_name', 'gstin'] },
+      ],
+      limit: parseInt(limit, 10),
+      offset: (parseInt(page, 10) - 1) * parseInt(limit, 10),
+    });
+
+    res.json({
+      success: true,
+      data: enquiries.rows,
+      pagination: {
+        page: parseInt(page, 10),
+        limit: parseInt(limit, 10),
+        total: enquiries.count,
+      },
+    });
+  } catch (error) {
+    console.error('listAllEnquiriesForAdmin error:', error);
+    res.status(500).json({ success: false, message: 'Failed to list enquiries' });
+  }
+};
+
 // ─── GET /api/enquiries/:id ─────────────────────────────────────────────────
 export const getEnquiryById = async (req, res) => {
   try {

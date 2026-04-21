@@ -30,6 +30,7 @@ import {
 import { listAuditLogs } from '../controllers/auditController.js';
 import { getConfig, updateConfig } from '../controllers/platformConfigController.js';
 import { b2bPipeline, updateMilestone } from '../controllers/b2bController.js';
+import { listAllEnquiriesForAdmin } from '../controllers/enquiryController.js';
 import {
   listAdmins, createAdmin, updateAdmin, deactivateAdmin,
 } from '../controllers/adminUsersController.js';
@@ -104,6 +105,7 @@ router.put('/config', requirePermission(PERMISSIONS.FINANCIAL_CONFIG), updateCon
 // B2B / Industrial pipeline
 router.get('/b2b/pipeline', requirePermission(PERMISSIONS.B2B_PIPELINE), b2bPipeline);
 router.put('/b2b/bookings/:id/milestone', requirePermission(PERMISSIONS.B2B_PIPELINE), updateMilestone);
+router.get('/enquiries', requirePermission(PERMISSIONS.B2B_PIPELINE), listAllEnquiriesForAdmin);
 
 // Bulk upload (Super Admin only — BULK_UPLOAD)
 router.post('/bulk/agents', requirePermission(PERMISSIONS.BULK_UPLOAD), bulkUploadMiddleware, bulkAgents);
