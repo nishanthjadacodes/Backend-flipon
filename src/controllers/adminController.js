@@ -126,14 +126,30 @@ const deleteService = async (req, res) => {
 // User Management
 const getAllUsers = async (req, res) => {
   try {
-    const users = await User.findAll({
-      order: [['created_at', 'DESC']]
-    });
+    const { role, status, kyc, search, limit, page } = req.query;
 
-    res.json({
-      success: true,
-      data: users
-    });
+    const where = {};
+    if (role) where.role = role;
+    if (status === 'active') where.is_active = true;
+    if (status === 'inactive') where.is_active = false;
+    if (kyc === 'verified') where.is_kyc_verified = true;
+    if (kyc === 'pending') where.is_kyc_verified = false;
+    if (search) {
+      const { Op } = await import('sequelize');
+      where[Op.or] = [
+        { name: { [Op.like]: `%${search}%` } },
+        { mobile: { [Op.like]: `%${search}%` } },
+        { email: { [Op.like]: `%${search}%` } },
+      ];
+    }
+
+    const opts = { where, order: [['created_at', 'DESC']] };
+    if (limit) opts.limit = parseInt(limit, 10);
+    if (page && limit) opts.offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+
+    const users = await User.findAll(opts);
+
+    res.json({ success: true, data: users });
   } catch (error) {
     console.error('Error fetching users:', error);
     res.status(500).json({
