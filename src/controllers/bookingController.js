@@ -1,4 +1,4 @@
-import { Booking, User, Service } from '../models/index.js';
+import { Booking, User, Service, Document } from '../models/index.js';
 import { Op } from 'sequelize';
 import { generateOTP } from '../utils/otpGenerator.js';
 import { getIoInstance } from '../config/socket.js';
@@ -134,6 +134,32 @@ const createBooking = async (req, res) => {
       priority
     });
 
+    // Link this customer's recently-uploaded "loose" documents (rows with
+    // booking_id = NULL) to the freshly-created booking so they show up
+    // on the Tracking screen. Limited to docs uploaded by this user in
+    // the last 24 hours so we don't accidentally attach stale uploads
+    // from a previous abandoned flow.
+    try {
+      const recentCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const [linked] = await Document.update(
+        { booking_id: booking.id },
+        {
+          where: {
+            uploaded_by: req.user.id,
+            booking_id: null,
+            created_at: { [Op.gte]: recentCutoff },
+          },
+        },
+      );
+      if (linked > 0) {
+        console.log(`[booking] linked ${linked} pre-uploaded docs to booking ${booking.id}`);
+      }
+    } catch (linkErr) {
+      // Non-fatal — booking still created successfully, docs just won't
+      // show in tracking. Worth logging but not worth failing the request.
+      console.error('[booking] failed to link pre-uploaded docs:', linkErr?.message);
+    }
+
     res.status(201).json({
       success: true,
       data: booking,
@@ -264,7 +290,17 @@ const getBookingDetails = async (req, res) => {
           model: User,
           as: 'customer',
           attributes: ['id', 'name', 'mobile']
-        }
+        },
+        {
+          // Documents attached to this booking — surfaced in the customer
+          // app's Tracking screen. Without this include, booking.documents
+          // is undefined and the screen shows "No documents attached" even
+          // when the user has uploaded several.
+          model: Document,
+          as: 'documents',
+          attributes: ['id', 'document_type', 'file_name', 'file_url', 'mime_type', 'is_verified', 'uploaded_at', 'category'],
+          required: false,
+        },
       ]
     });
 
