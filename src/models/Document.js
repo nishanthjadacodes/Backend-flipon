@@ -23,28 +23,22 @@ const Document = sequelize.define('Document', {
       key: 'id'
     }
   },
+  // Was a strict ENUM with 14 hardcoded values. The booking flow sends
+  // arbitrary types from service.required_documents (voter_id_card,
+  // disability_certificate, bank_passbook, additional_document_1, etc.) —
+  // any value outside the ENUM list silently failed Sequelize validation
+  // and the controller returned a vague "Upload failed". STRING accepts
+  // any type the service catalog defines.
   document_type: {
-    type: DataTypes.ENUM(
-      'aadhaar_front', 
-      'aadhaar_back', 
-      'pan_card', 
-      'profile_photo', 
-      'address_proof', 
-      'identity_proof',
-      'income_certificate', 
-      'caste_certificate', 
-      'passport_photo', 
-      'passport_sized_photo',
-      'signature', 
-      'gst_certificate', 
-      'company_registration', 
-      'other'
-    ),
-    allowNull: false
+    type: DataTypes.STRING(80),
+    allowNull: false,
   },
+  // Same problem — kept narrow, made the controller fragile. STRING with
+  // a sensible default is enough; admin reports group on this anyway.
   category: {
-    type: DataTypes.ENUM('kyc', 'booking', 'application'),
-    defaultValue: 'booking'
+    type: DataTypes.STRING(40),
+    defaultValue: 'booking',
+    allowNull: false,
   },
   file_name: {
     type: DataTypes.STRING(255),
