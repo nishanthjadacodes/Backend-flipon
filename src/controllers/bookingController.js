@@ -134,30 +134,30 @@ const createBooking = async (req, res) => {
       priority
     });
 
-    // Link this customer's recently-uploaded "loose" documents (rows with
-    // booking_id = NULL) to the freshly-created booking so they show up
-    // on the Tracking screen. Limited to docs uploaded by this user in
-    // the last 24 hours so we don't accidentally attach stale uploads
-    // from a previous abandoned flow.
+    // Link the documents the user uploaded for THIS booking session.
+    // The app keeps the list of document IDs returned from each upload
+    // and sends them in `document_ids: [...]` on the booking payload.
+    // We only attach the ones the user explicitly sends — never sweep
+    // up "all recent" loose docs (that leaked across services).
     try {
-      const recentCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const [linked] = await Document.update(
-        { booking_id: booking.id },
-        {
-          where: {
-            uploaded_by: req.user.id,
-            booking_id: null,
-            created_at: { [Op.gte]: recentCutoff },
+      const requestedIds = Array.isArray(req.body.document_ids)
+        ? req.body.document_ids.filter(Boolean)
+        : [];
+      if (requestedIds.length) {
+        const [linked] = await Document.update(
+          { booking_id: booking.id },
+          {
+            where: {
+              id: { [Op.in]: requestedIds },
+              uploaded_by: req.user.id, // owner check — can't hijack others' docs
+              booking_id: null,         // don't re-attach docs already on another booking
+            },
           },
-        },
-      );
-      if (linked > 0) {
-        console.log(`[booking] linked ${linked} pre-uploaded docs to booking ${booking.id}`);
+        );
+        console.log(`[booking] linked ${linked}/${requestedIds.length} session docs to booking ${booking.id}`);
       }
     } catch (linkErr) {
-      // Non-fatal — booking still created successfully, docs just won't
-      // show in tracking. Worth logging but not worth failing the request.
-      console.error('[booking] failed to link pre-uploaded docs:', linkErr?.message);
+      console.error('[booking] failed to link session docs:', linkErr?.message);
     }
 
     res.status(201).json({
