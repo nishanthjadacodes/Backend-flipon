@@ -1,4 +1,4 @@
-import { Booking, User, Service, Document } from '../models/index.js';
+import { Booking, User, Service, Document, sequelize } from '../models/index.js';
 import { Op } from 'sequelize';
 import { generateOTP } from '../utils/otpGenerator.js';
 import { getIoInstance } from '../config/socket.js';
@@ -115,6 +115,20 @@ const createBooking = async (req, res) => {
       });
     }
 
+    // Sequential customer-facing booking number (1, 2, 3, …). Surfaces
+    // as Flip#001 / Flip#002 in the app. Best-effort — if the SELECT or
+    // unique-constraint hits a collision we fall through to NULL and the
+    // app falls back to its UUID-derived display.
+    let bookingNumber = null;
+    try {
+      const [rows] = await sequelize.query(
+        'SELECT COALESCE(MAX(booking_number), 0) + 1 AS next FROM bookings',
+      );
+      bookingNumber = rows?.[0]?.next || null;
+    } catch (e) {
+      console.error('[booking] could not compute next booking_number:', e?.message);
+    }
+
     const booking = await Booking.create({
       customer_id: req.user.id,
       service_id: finalServiceId,
@@ -129,9 +143,11 @@ const createBooking = async (req, res) => {
       home_service_details,
       industrial_service_details,
       documents_required: service.required_documents,
+      dynamic_fields: req.body.dynamic_fields || null,
       price_quoted: service.user_cost,
       notes,
-      priority
+      priority,
+      booking_number: bookingNumber,
     });
 
     // Link the documents the user uploaded for THIS booking session.

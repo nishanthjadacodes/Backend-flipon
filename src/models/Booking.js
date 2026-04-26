@@ -35,6 +35,23 @@ const Booking = sequelize.define('Booking', {
     type: DataTypes.ENUM('consumer', 'industrial'),
     allowNull: false
   },
+  // Sequential, customer-friendly identifier (1, 2, 3, …). Assigned by
+  // the controller in createBooking — we compute MAX(booking_number)+1.
+  // Surfaces in the app as "Flip#001", "Flip#002", etc. (formatBookingId
+  // pads to 3 digits). UNIQUE to prevent collisions; UI uses this for
+  // display while the UUID `id` stays the canonical primary key.
+  booking_number: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    unique: true,
+  },
+  // Whatever the customer typed into the dynamic, service-defined form
+  // fields on the booking screen. Stored as JSON so admins can render
+  // the same key:value pairs without per-field columns.
+  dynamic_fields: {
+    type: DataTypes.JSON,
+    allowNull: true,
+  },
   status: {
     type: DataTypes.ENUM('pending', 'assigned', 'accepted', 'documents_collected', 'submitted', 'completed', 'cancelled'),
     defaultValue: 'pending'
