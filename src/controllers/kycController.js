@@ -11,7 +11,7 @@ const submitKyc = async (req, res) => {
       await transaction.rollback();
       return res.status(403).json({
         success: false,
-        message: 'Only agents can submit KYC documents'
+        message: 'Only representatives can submit KYC documents'
       });
     }
 
@@ -121,7 +121,7 @@ const getMyKycStatus = async (req, res) => {
     if (req.user.role !== 'agent') {
       return res.status(403).json({
         success: false,
-        message: 'Only agents can view KYC status'
+        message: 'Only representatives can view KYC status'
       });
     }
 
@@ -297,7 +297,7 @@ const getAgentKycDetails = async (req, res) => {
     if (!agentKyc) {
       return res.status(404).json({
         success: false,
-        message: 'KYC not found for this agent'
+        message: 'KYC not found for this representative'
       });
     }
 
@@ -317,7 +317,7 @@ const getAgentKycDetails = async (req, res) => {
     console.error('Error fetching agent KYC details:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch agent KYC details'
+      message: 'Failed to fetch representative KYC details'
     });
   }
 };
@@ -363,7 +363,7 @@ const verifyAgentKyc = async (req, res) => {
       await transaction.rollback();
       return res.status(404).json({
         success: false,
-        message: 'KYC not found for this agent'
+        message: 'KYC not found for this representative'
       });
     }
 

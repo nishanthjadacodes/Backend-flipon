@@ -81,7 +81,7 @@ router.post('/:id/assign-agent', auth, (req, res, next) => {
     if (!agentId) {
       return res.status(400).json({
         success: false,
-        message: 'Agent ID is required'
+        message: 'Representative ID is required'
       });
     }
 
@@ -106,7 +106,7 @@ router.post('/:id/assign-agent', auth, (req, res, next) => {
     if (!agent || agent.role !== 'agent' || !agent.is_active) {
       return res.status(404).json({
         success: false,
-        message: 'Agent not found or not active'
+        message: 'Representative not found or not active'
       });
     }
 
@@ -119,13 +119,13 @@ router.post('/:id/assign-agent', auth, (req, res, next) => {
     res.json({
       success: true,
       data: booking,
-      message: 'Agent assigned successfully'
+      message: 'Representative assigned successfully'
     });
   } catch (error) {
     console.error('Error assigning agent:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to assign agent'
+      message: 'Failed to assign representative'
     });
   }
 });

@@ -205,7 +205,7 @@ const getMyKycDocuments = async (req, res) => {
     if (req.user.role !== 'agent') {
       return res.status(403).json({
         success: false,
-        message: 'Only agents can view KYC documents'
+        message: 'Only representatives can view KYC documents'
       });
     }
 

@@ -222,7 +222,7 @@ const agentGuestLogin = async (_req, res) => {
     return res.json({ success: true, token, user });
   } catch (error) {
     console.error('[agent-guest-login] Unexpected error:', error);
-    res.status(500).json({ success: false, message: 'Failed to start agent guest session' });
+    res.status(500).json({ success: false, message: 'Failed to start representative guest session' });
   }
 };
 

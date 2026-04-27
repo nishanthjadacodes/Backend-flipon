@@ -882,7 +882,7 @@ const acceptTask = async (req, res) => {
         io.to(`user_${booking.customer_id}`).emit('booking_update_notification', {
           bookingId: booking.id,
           status: 'accepted',
-          message: 'Your agent has accepted the assignment',
+          message: 'Your representative has accepted the assignment',
           timestamp: new Date().toISOString(),
         });
       }

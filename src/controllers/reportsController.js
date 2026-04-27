@@ -170,7 +170,7 @@ export const agentPerformance = async (req, res) => {
     res.json({ success: true, data: agents });
   } catch (error) {
     console.error('agentPerformance error:', error);
-    res.status(500).json({ success: false, message: 'Failed to load agent performance' });
+    res.status(500).json({ success: false, message: 'Failed to load representative performance' });
   }
 };
 

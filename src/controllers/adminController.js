@@ -286,7 +286,7 @@ const assignAgent = async (req, res) => {
     if (!bookingId || !agentId) {
       return res.status(400).json({
         success: false,
-        message: 'Booking ID and Agent ID are required'
+        message: 'Booking ID and Representative ID are required'
       });
     }
 
@@ -309,7 +309,7 @@ const assignAgent = async (req, res) => {
     if (!agent || agent.role !== 'agent' || !agent.is_active) {
       return res.status(404).json({
         success: false,
-        message: 'Agent not found or not active'
+        message: 'Representative not found or not active'
       });
     }
 
@@ -359,13 +359,13 @@ const assignAgent = async (req, res) => {
     res.json({
       success: true,
       data: hydrated,
-      message: 'Agent assigned successfully',
+      message: 'Representative assigned successfully',
     });
   } catch (error) {
     console.error('Error assigning agent:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to assign agent'
+      message: 'Failed to assign representative'
     });
   }
 };
@@ -461,7 +461,7 @@ const getAvailableAgents = async (req, res) => {
     console.error('Error fetching available agents:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch available agents'
+      message: 'Failed to fetch available representatives'
     });
   }
 };
