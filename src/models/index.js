@@ -105,11 +105,17 @@ VaultDocument.hasMany(VaultAccessLog,   { foreignKey: 'vault_document_id', as: '
 VaultAccessLog.belongsTo(VaultDocument, { foreignKey: 'vault_document_id', as: 'vaultDocument' });
 VaultAccessLog.belongsTo(User,          { foreignKey: 'actor_user_id', as: 'actor' });
 
-// Sync all models with database
+// Sync all models with database.
+//
+// DO NOT use `alter: true` against TiDB. TiDB rejects `CHANGE COLUMN` on
+// columns with UNIQUE constraints (errno 8200), which crashes the boot.
+// For new columns, run a raw `ALTER TABLE ... ADD COLUMN` manually instead.
 const syncModels = async () => {
   try {
-    await sequelize.sync({ alter: process.env.DB_ALTER === 'true' });
-    // Create new tables only (won't touch existing ones)
+    // Plain sync — creates missing tables, never touches existing schema.
+    await sequelize.sync();
+    // Belt-and-suspenders for tables that were added later (these run create-
+    // if-not-exists too, so they're safe to call repeatedly).
     await Referral.sync();
     await Ticket.sync();
     await AuditLog.sync();
