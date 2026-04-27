@@ -368,8 +368,20 @@ const getBookingDetails = async (req, res) => {
       });
     }
 
-    // Check if user is authorized to view this booking
-    if (booking.customer_id !== req.user.id && req.user.role !== 'super_admin' && booking.agent_id !== req.user.id) {
+    // Check if user is authorized to view this booking. Customer + assigned
+    // representative + any admin role have read access.
+    const ADMIN_ROLES = new Set([
+      'super_admin',
+      'operations_manager',
+      'customer_support',
+      'b2b_admin',
+      'finance_admin',
+    ]);
+    if (
+      booking.customer_id !== req.user.id &&
+      booking.agent_id !== req.user.id &&
+      !ADMIN_ROLES.has(req.user.role)
+    ) {
       return res.status(403).json({
         success: false,
         message: 'Access denied'

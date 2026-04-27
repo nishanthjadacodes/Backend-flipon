@@ -158,10 +158,22 @@ const getBookingDocuments = async (req, res) => {
       });
     }
 
-    // Check permissions
-    if (booking.customer_id !== req.user.id && 
-        booking.agent_id !== req.user.id && 
-        req.user.role !== 'super_admin') {
+    // Check permissions. Customer + assigned agent (representative) always
+    // have access. Any admin role has read access — operations managers,
+    // customer support, b2b admins and finance admins all need to inspect
+    // booking documents to do their jobs.
+    const ADMIN_ROLES = new Set([
+      'super_admin',
+      'operations_manager',
+      'customer_support',
+      'b2b_admin',
+      'finance_admin',
+    ]);
+    if (
+      booking.customer_id !== req.user.id &&
+      booking.agent_id !== req.user.id &&
+      !ADMIN_ROLES.has(req.user.role)
+    ) {
       return res.status(403).json({
         success: false,
         message: 'Access denied'
