@@ -391,12 +391,13 @@ const getBookingDetails = async (req, res) => {
     // Hydrate document file_url with the absolute upload URL so the customer
     // app's preview modal can render the image directly. Without this, the
     // raw stored filename ("abc123.jpg") arrives at <Image source={{uri}}>
-    // and the modal renders a black screen.
+    // and the modal renders a black screen. We pass `req` so getFileUrl can
+    // derive the host from the request if no env var is configured.
     const responseBody = booking.toJSON();
     if (Array.isArray(responseBody.documents)) {
       responseBody.documents = responseBody.documents.map((d) => ({
         ...d,
-        file_url: d.file_url ? getFileUrl(d.file_url, d.category) : d.file_url,
+        file_url: d.file_url ? getFileUrl(d.file_url, d.category, req) : d.file_url,
       }));
     }
 

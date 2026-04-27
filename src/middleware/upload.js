@@ -122,15 +122,34 @@ export const deleteFile = (filePath) => {
 
 // Utility function to get file URL.
 //
-// On Render, the env auto-sets RENDER_EXTERNAL_URL — we use that as a
-// fallback so uploaded files resolve to the public URL even if BASE_URL
-// hasn't been configured manually. Local dev still falls through to
-// http://localhost:<port>.
-export const getFileUrl = (fileName, category = 'documents') => {
-  const baseUrl =
-    process.env.BASE_URL ||
-    process.env.RENDER_EXTERNAL_URL ||
-    `http://localhost:${process.env.PORT || 3001}`;
+// Order of precedence for the host:
+//   1. BASE_URL                      — explicit override (recommended for prod)
+//   2. RENDER_EXTERNAL_URL           — full URL Render auto-injects
+//   3. RENDER_EXTERNAL_HOSTNAME      — hostname-only Render fallback
+//   4. detected from request (req)   — when caller passes the request object
+//   5. localhost:<port>              — local dev fallback
+export const getFileUrl = (fileName, category = 'documents', req = null) => {
+  let baseUrl = process.env.BASE_URL;
+
+  if (!baseUrl && process.env.RENDER_EXTERNAL_URL) {
+    baseUrl = process.env.RENDER_EXTERNAL_URL;
+  }
+
+  if (!baseUrl && process.env.RENDER_EXTERNAL_HOSTNAME) {
+    baseUrl = `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`;
+  }
+
+  // Last resort — derive from the incoming request if the caller supplied it.
+  if (!baseUrl && req && req.headers) {
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+    if (host) baseUrl = `${proto}://${host}`;
+  }
+
+  if (!baseUrl) {
+    baseUrl = `http://localhost:${process.env.PORT || 3001}`;
+  }
+
   return `${baseUrl}/uploads/${category}/${fileName}`;
 };
 

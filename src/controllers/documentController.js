@@ -192,10 +192,11 @@ const getBookingDocuments = async (req, res) => {
       order: [['created_at', 'DESC']]
     });
 
-    // Add file URLs
+    // Add absolute file URLs. Pass `req` so getFileUrl can derive the host
+    // from the request if no BASE_URL env var is configured on Render.
     const documentsWithUrls = documents.map(doc => ({
       ...doc.toJSON(),
-      file_url: getFileUrl(doc.file_url, doc.category)
+      file_url: getFileUrl(doc.file_url, doc.category, req)
     }));
 
     res.json({
@@ -228,10 +229,11 @@ const getMyKycDocuments = async (req, res) => {
       order: [['created_at', 'DESC']]
     });
 
-    // Add file URLs
+    // Add absolute file URLs. Pass req so getFileUrl can derive host from
+    // the request if BASE_URL / RENDER_EXTERNAL_URL aren't configured.
     const documentsWithUrls = documents.map(doc => ({
       ...doc.toJSON(),
-      file_url: getFileUrl(doc.file_url, doc.category)
+      file_url: getFileUrl(doc.file_url, doc.category, req)
     }));
 
     res.json({
