@@ -120,9 +120,17 @@ export const deleteFile = (filePath) => {
   }
 };
 
-// Utility function to get file URL
+// Utility function to get file URL.
+//
+// On Render, the env auto-sets RENDER_EXTERNAL_URL — we use that as a
+// fallback so uploaded files resolve to the public URL even if BASE_URL
+// hasn't been configured manually. Local dev still falls through to
+// http://localhost:<port>.
 export const getFileUrl = (fileName, category = 'documents') => {
-  const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3001}`;
+  const baseUrl =
+    process.env.BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    `http://localhost:${process.env.PORT || 3001}`;
   return `${baseUrl}/uploads/${category}/${fileName}`;
 };
 

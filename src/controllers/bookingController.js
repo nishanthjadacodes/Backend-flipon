@@ -1,6 +1,7 @@
 import { Booking, User, Service, Document, Referral, sequelize } from '../models/index.js';
 import { Op } from 'sequelize';
 import { generateOTP } from '../utils/otpGenerator.js';
+import { getFileUrl } from '../middleware/upload.js';
 import { getIoInstance } from '../config/socket.js';
 import {
   sendBookingNotification,
@@ -375,9 +376,21 @@ const getBookingDetails = async (req, res) => {
       });
     }
 
+    // Hydrate document file_url with the absolute upload URL so the customer
+    // app's preview modal can render the image directly. Without this, the
+    // raw stored filename ("abc123.jpg") arrives at <Image source={{uri}}>
+    // and the modal renders a black screen.
+    const responseBody = booking.toJSON();
+    if (Array.isArray(responseBody.documents)) {
+      responseBody.documents = responseBody.documents.map((d) => ({
+        ...d,
+        file_url: d.file_url ? getFileUrl(d.file_url, d.category) : d.file_url,
+      }));
+    }
+
     res.json({
       success: true,
-      data: booking
+      data: responseBody,
     });
   } catch (error) {
     console.error('Error fetching booking details:', error);
