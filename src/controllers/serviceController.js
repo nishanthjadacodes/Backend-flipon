@@ -1,4 +1,5 @@
-import { Service } from '../models/index.js';
+import { Service, Booking, sequelize } from '../models/index.js';
+import { Op } from 'sequelize';
 
 const getAllServices = async (req, res) => {
   try {
@@ -173,9 +174,102 @@ const deleteService = async (req, res) => {
   }
 };
 
+// GET /api/services/trending — services ranked by booking volume in the
+// last 30 days. Falls back to all active services if there's no booking
+// history yet (fresh installs / first month after launch).
+const getTrendingServices = async (req, res) => {
+  try {
+    const since = new Date();
+    since.setDate(since.getDate() - 30);
+
+    const counts = await Booking.findAll({
+      attributes: [
+        'service_id',
+        [sequelize.fn('COUNT', sequelize.col('service_id')), 'booking_count'],
+      ],
+      where: {
+        service_id: { [Op.ne]: null },
+        created_at: { [Op.gte]: since },
+      },
+      group: ['service_id'],
+      order: [[sequelize.literal('booking_count'), 'DESC']],
+      limit: 6,
+      raw: true,
+    });
+
+    let services = [];
+    if (counts.length) {
+      const ids = counts.map((c) => c.service_id);
+      const rows = await Service.findAll({ where: { id: ids, is_active: true } });
+      // Re-order rows to match the trending rank.
+      services = ids
+        .map((id) => rows.find((r) => r.id === id))
+        .filter(Boolean);
+    }
+
+    if (!services.length) {
+      services = await Service.findAll({
+        where: { is_active: true },
+        order: [['name', 'ASC']],
+        limit: 6,
+      });
+    }
+
+    res.json({ success: true, data: services });
+  } catch (error) {
+    console.error('Get trending services error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch trending services' });
+  }
+};
+
+// GET /api/services/offers — promotional offers (currently config-driven so
+// admin can edit without redeploying).
+const getOffers = async (req, res) => {
+  try {
+    // Hard-coded for now; swap to PlatformConfig.findOne({ where: { key: 'offers' } })
+    // once the admin "Manage Offers" UI is wired up.
+    const offers = [
+      {
+        id: 'first_booking_20_off',
+        title: '₹20 OFF on First Booking',
+        description: 'Use your friend\'s referral code at signup to get ₹20 off your very first service.',
+        discount: 20,
+        type: 'flat',
+        validUntil: null,
+        bannerColor: '#F4A100',
+      },
+      {
+        id: 'fast_track_save_50',
+        title: 'Fast-Track Service for ₹50',
+        description: 'Skip the queue — get any service in 90 minutes for just ₹50 extra.',
+        discount: 0,
+        type: 'upsell',
+        validUntil: null,
+        bannerColor: '#003153',
+      },
+      {
+        id: 'b2b_factory_camp',
+        title: 'Industrial Factory Camps',
+        description: 'On-site documentation drives for factories of 50+ workers. Quote within 24h.',
+        discount: 0,
+        type: 'b2b',
+        validUntil: null,
+        bannerColor: '#1B4B72',
+      },
+    ];
+
+    res.json({ success: true, data: offers });
+  } catch (error) {
+    console.error('Get offers error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch offers' });
+  }
+};
+
 export {
   getAllServices,
   getServiceById,
+  getTrendingServices,
+  getOffers,
   createService,
   updateService,
   deleteService

@@ -104,6 +104,12 @@ const User = sequelize.define('User', {
     type: DataTypes.DATE,
     allowNull: true
   },
+  // In-app wallet balance — referral cashback, refunds, promo credits.
+  wallet_balance: {
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0,
+    allowNull: false
+  },
   created_at: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW

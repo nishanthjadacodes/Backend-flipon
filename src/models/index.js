@@ -17,6 +17,7 @@ import VaultAccessLog from './VaultAccessLog.js';
 import PlatformConfig from './PlatformConfig.js';
 import Royalty from './Royalty.js';
 import TicketMessage from './TicketMessage.js';
+import WalletTransaction from './WalletTransaction.js';
 
 // Define associations
 User.hasMany(Booking, { foreignKey: 'customer_id', as: 'customerBookings' });
@@ -52,6 +53,11 @@ User.hasMany(Referral, { foreignKey: 'referrer_id', as: 'sentReferrals' });
 User.hasMany(Referral, { foreignKey: 'referee_id', as: 'receivedReferrals' });
 Referral.belongsTo(User, { foreignKey: 'referrer_id', as: 'referrer' });
 Referral.belongsTo(User, { foreignKey: 'referee_id', as: 'referee' });
+
+// Wallet associations
+User.hasMany(WalletTransaction, { foreignKey: 'user_id', as: 'walletTransactions' });
+WalletTransaction.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+WalletTransaction.belongsTo(Booking, { foreignKey: 'booking_id', as: 'booking' });
 
 // Ticket associations
 Ticket.belongsTo(User, { foreignKey: 'customer_id', as: 'customer' });
@@ -116,6 +122,7 @@ const syncModels = async () => {
     await PlatformConfig.sync();
     await Royalty.sync();
     await TicketMessage.sync();
+    await WalletTransaction.sync();
     console.log('Database models synchronized successfully.');
   } catch (error) {
     console.error('Error synchronizing database models:', error);
@@ -142,6 +149,7 @@ export {
   PlatformConfig,
   Royalty,
   TicketMessage,
+  WalletTransaction,
   sequelize,
   syncModels
 };

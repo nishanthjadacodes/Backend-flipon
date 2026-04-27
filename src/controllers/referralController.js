@@ -63,21 +63,38 @@ const getReferralData = async (req, res) => {
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
 
+    // Last month boundaries (start of last month → start of this month)
+    const lastMonthStart = new Date(monthStart);
+    lastMonthStart.setMonth(lastMonthStart.getMonth() - 1);
+    const lastMonthEnd = monthStart; // exclusive
+
     const downlineAgentIds = referrals.filter(r => r.referee_id).map(r => r.referee_id);
     let totalTeamBusiness = 0;
     let activeMentees = 0;
+    let lastMonthTeamBusiness = 0;
 
     if (downlineAgentIds.length > 0) {
-      const downlineBookings = await Booking.findAll({
-        where: {
-          agent_id: { [Op.in]: downlineAgentIds },
-          status: 'completed',
-          completed_at: { [Op.gte]: monthStart },
-        },
-        attributes: ['agent_id', 'price_quoted'],
-      });
-      totalTeamBusiness = downlineBookings.reduce((sum, b) => sum + parseFloat(b.price_quoted || 0), 0);
-      activeMentees = new Set(downlineBookings.map(b => b.agent_id)).size;
+      const [thisMonthBookings, lastMonthBookings] = await Promise.all([
+        Booking.findAll({
+          where: {
+            agent_id: { [Op.in]: downlineAgentIds },
+            status: 'completed',
+            completed_at: { [Op.gte]: monthStart },
+          },
+          attributes: ['agent_id', 'price_quoted'],
+        }),
+        Booking.findAll({
+          where: {
+            agent_id: { [Op.in]: downlineAgentIds },
+            status: 'completed',
+            completed_at: { [Op.gte]: lastMonthStart, [Op.lt]: lastMonthEnd },
+          },
+          attributes: ['price_quoted'],
+        }),
+      ]);
+      totalTeamBusiness = thisMonthBookings.reduce((sum, b) => sum + parseFloat(b.price_quoted || 0), 0);
+      activeMentees = new Set(thisMonthBookings.map(b => b.agent_id)).size;
+      lastMonthTeamBusiness = lastMonthBookings.reduce((sum, b) => sum + parseFloat(b.price_quoted || 0), 0);
     }
 
     // Personal activity check (min 5 tasks/month for royalty eligibility)
@@ -90,19 +107,74 @@ const getReferralData = async (req, res) => {
     });
 
     const currentMonthRoyalty = personalTasks >= 5 ? Math.round(totalTeamBusiness * 0.02) : 0;
+    // Last month always pays out (qualification was checked at the time);
+    // here we just show the calculated 2% so the agent sees historical earnings.
+    const lastMonthRoyalty = Math.round(lastMonthTeamBusiness * 0.02);
 
-    // Format referral list
+    // Active vs inactive flag — a referee is "active" if they have at least
+    // one booking (any status except cancelled) in the last 30 days.
+    const activeWindow = new Date();
+    activeWindow.setDate(activeWindow.getDate() - 30);
+
+    const refereeIds = referrals.filter(r => r.referee_id).map(r => r.referee_id);
+    let activityByUser = {};
+    if (refereeIds.length) {
+      const recentBookings = await Booking.findAll({
+        where: {
+          [Op.or]: [
+            { customer_id: { [Op.in]: refereeIds } },
+            { agent_id: { [Op.in]: refereeIds } },
+          ],
+          status: { [Op.ne]: 'cancelled' },
+          created_at: { [Op.gte]: activeWindow },
+        },
+        attributes: ['customer_id', 'agent_id'],
+      });
+      for (const b of recentBookings) {
+        if (b.customer_id) activityByUser[b.customer_id] = true;
+        if (b.agent_id) activityByUser[b.agent_id] = true;
+      }
+    }
+
+    // Level-2 (downline of downline) — for the tree/network view. Each
+    // direct referee may themselves have referred others; we surface those
+    // grouped under each level-1 referrer.
+    const level2ByParent = {};
+    if (refereeIds.length) {
+      const level2 = await Referral.findAll({
+        where: { referrer_id: { [Op.in]: refereeIds } },
+        include: [{ model: User, as: 'referee', attributes: ['id', 'name', 'mobile', 'created_at'] }],
+      });
+      for (const r of level2) {
+        if (!level2ByParent[r.referrer_id]) level2ByParent[r.referrer_id] = [];
+        level2ByParent[r.referrer_id].push({
+          id: r.id,
+          name: r.referee?.name || 'Pending Signup',
+          mobile: r.referee?.mobile || '',
+          status: r.status,
+          isActive: !!activityByUser[r.referee_id],
+        });
+      }
+    }
+
+    // Format referral list (level 1) with active flag and nested level 2.
     const referralList = referrals.map(r => ({
       id: r.id,
+      refereeId: r.referee_id,
       name: r.referee?.name || 'Pending Signup',
       mobile: r.referee?.mobile || '',
       status: r.status,
+      isActive: !!activityByUser[r.referee_id],
       signupDate: r.referee?.created_at || r.created_at,
       firstServiceDate: r.first_service_completed_at,
       reward: r.status === 'completed' ? parseFloat(r.reward_amount) : 0,
       rewardDate: r.credited_at,
       expiryDate: r.expires_at,
+      children: r.referee_id ? (level2ByParent[r.referee_id] || []) : [],
     }));
+
+    const activeCount = referralList.filter(r => r.isActive).length;
+    const inactiveCount = referralList.length - activeCount;
 
     res.json({
       success: true,
@@ -110,6 +182,8 @@ const getReferralData = async (req, res) => {
       referralLink: `https://fliponex.app/referral/${user.referral_code}`,
       totalReferrals,
       successfulReferrals,
+      activeReferrals: activeCount,
+      inactiveReferrals: inactiveCount,
       totalEarned,
       availableCredits,
       usedCredits: 0,
@@ -118,8 +192,10 @@ const getReferralData = async (req, res) => {
       milestones,
       royalty: {
         totalTeamBusiness,
+        lastMonthTeamBusiness,
         activeMentees,
         currentMonthRoyalty,
+        lastMonthRoyalty,
         personalTasksCompleted: personalTasks,
         minimumTeamTurnoverMet: totalTeamBusiness >= 5000,
         qualityScore: parseFloat(user.rating || 0),

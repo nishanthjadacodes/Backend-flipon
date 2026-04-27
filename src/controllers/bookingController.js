@@ -1,4 +1,4 @@
-import { Booking, User, Service, Document, sequelize } from '../models/index.js';
+import { Booking, User, Service, Document, Referral, sequelize } from '../models/index.js';
 import { Op } from 'sequelize';
 import { generateOTP } from '../utils/otpGenerator.js';
 import { getIoInstance } from '../config/socket.js';
@@ -8,6 +8,46 @@ import {
   sendDocumentNotification,
   sendJobCompletionNotification
 } from '../services/notificationService.js';
+import { creditWallet } from './walletController.js';
+
+// Spec: when User B (referee) completes their first paid service, credit the
+// referrer ₹50 and mark the Referral row as 'completed'. Idempotent — only
+// triggers if the referral is still 'pending'.
+const triggerReferralRewardIfFirstBooking = async (customerId, bookingId) => {
+  try {
+    const referral = await Referral.findOne({
+      where: { referee_id: customerId, status: 'pending' },
+    });
+    if (!referral) return;
+
+    // Confirm this is the customer's first completed booking — guards against
+    // the trigger firing on later completions if status was rolled back.
+    const completedCount = await Booking.count({
+      where: { customer_id: customerId, status: 'completed' },
+    });
+    if (completedCount > 1) return;
+
+    const now = new Date();
+    await referral.update({
+      status: 'completed',
+      first_service_completed_at: now,
+      credited_at: now,
+    });
+
+    // Spec: ₹50 to referrer's wallet (referrer reward), ₹20 discount already
+    // captured on the referee's first booking via referee_discount.
+    await creditWallet({
+      userId: referral.referrer_id,
+      amount: 50,
+      source: 'referral_reward',
+      description: 'Friend completed first service',
+      bookingId,
+    });
+  } catch (e) {
+    // Don't break the completion flow if reward credit fails.
+    console.error('Referral reward trigger failed:', e);
+  }
+};
 
 // Create new booking
 const createBooking = async (req, res) => {
@@ -437,11 +477,25 @@ const updateJobStatus = async (req, res) => {
     const { id } = req.params;
     const { status, documents_collected, submission_details, notes } = req.body;
 
-    const validStatuses = ['documents_collected', 'submitted', 'completed'];
-    if (!validStatuses.includes(status)) {
+    // The agent app's status flow has more steps than the backend ENUM. Map
+    // each agent-app status to (a) the DB status to write (or null = no
+    // status change, just record progress), and (b) which timestamp column
+    // to stamp.
+    const statusMap = {
+      started:             { dbStatus: null,                  stamp: null },
+      reached_location:    { dbStatus: null,                  stamp: null },
+      in_progress:         { dbStatus: null,                  stamp: null },
+      documents_collected: { dbStatus: 'documents_collected', stamp: 'documents_collected_at' },
+      work_completed:      { dbStatus: 'submitted',           stamp: 'submitted_at' },
+      submitted:           { dbStatus: 'submitted',           stamp: 'submitted_at' },
+      completed:           { dbStatus: 'completed',           stamp: null },
+    };
+
+    const mapping = statusMap[status];
+    if (!mapping) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid status transition'
+        message: `Invalid status "${status}". Allowed: ${Object.keys(statusMap).join(', ')}`,
       });
     }
 
@@ -461,18 +515,17 @@ const updateJobStatus = async (req, res) => {
       });
     }
 
-    const updates = {
-      status,
-      agent_notes: notes
-    };
+    const updates = {};
+    if (mapping.dbStatus) updates.status = mapping.dbStatus;
+    if (notes) updates.agent_notes = notes;
 
     if (status === 'documents_collected') {
       updates.documents_collected = documents_collected;
       updates.documents_collected_at = new Date();
     }
 
-    if (status === 'submitted') {
-      updates.submission_details = submission_details;
+    if (status === 'submitted' || status === 'work_completed') {
+      if (submission_details) updates.submission_details = submission_details;
       updates.submitted_at = new Date();
     }
 
@@ -482,6 +535,15 @@ const updateJobStatus = async (req, res) => {
       updates.completion_otp = completionOTP;
       updates.completion_otp_generated_at = new Date();
       console.log(`Completion OTP for booking ${id}: ${completionOTP}`);
+    }
+
+    // Append a progress note for sub-steps that don't change DB status (so
+    // admins still see the timeline in agent_notes).
+    if (!mapping.dbStatus) {
+      const stampLine = `[${new Date().toISOString()}] agent: ${status}`;
+      updates.agent_notes = booking.agent_notes
+        ? `${booking.agent_notes}\n${stampLine}`
+        : stampLine;
     }
 
     await booking.update(updates);
@@ -598,6 +660,10 @@ const verifyCompletionOTP = async (req, res) => {
         });
       }
     }
+
+    // Spec H: trigger double-sided referral reward on first completed booking.
+    // Runs async so a wallet/credit hiccup doesn't break the OTP response.
+    triggerReferralRewardIfFirstBooking(booking.customer_id, id);
 
     res.json({
       success: true,
