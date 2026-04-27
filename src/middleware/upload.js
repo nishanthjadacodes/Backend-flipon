@@ -7,13 +7,18 @@ import fs from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Allowed category folders. Anything else falls back to 'documents'.
+const ALLOWED_CATEGORIES = new Set(['documents', 'kyc', 'booking', 'temp', 'enquiry']);
+
 // Create upload directories if they don't exist
 const createUploadDirs = () => {
   const dirs = [
     'uploads',
     'uploads/documents',
     'uploads/kyc',
-    'uploads/temp'
+    'uploads/booking',
+    'uploads/temp',
+    'uploads/enquiry',
   ];
 
   dirs.forEach(dir => {
@@ -32,24 +37,33 @@ createUploadDirs();
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     try {
-      let uploadPath = 'uploads/documents';
-      
-      // Determine upload path based on category or document type
-      const docType = req.body.document_type || req.body.documentType;
-      if (req.body.category === 'kyc' || docType?.includes('aadhaar') || 
-          docType?.includes('pan') || docType?.includes('profile')) {
-        uploadPath = 'uploads/kyc';
-      }
-      
+      // Use the EXPLICIT category from the request body. The disk path must
+      // match the DB row's `category` column — otherwise getFileUrl builds
+      // a URL pointing at the wrong folder and the image 404s.
+      //
+      // Previously this auto-routed aadhaar/pan/profile uploads to /kyc/
+      // regardless of the body category, which caused the booking flow's
+      // doc previews to 404 (DB said /booking/ but file was in /kyc/).
+      // Default to 'booking' to match documentController's `category = 'booking'`
+      // destructuring default — keeps multer's disk path in sync with the
+      // category written to the DB row.
+      const requestedCategory = String(
+        req.body.category || req.body.Category || 'booking'
+      ).toLowerCase();
+      const safeCategory = ALLOWED_CATEGORIES.has(requestedCategory)
+        ? requestedCategory
+        : 'documents';
+      const uploadPath = `uploads/${safeCategory}`;
+
       const fullPath = path.join(__dirname, '../../', uploadPath);
-      
-      // Ensure directory exists
+
+      // Ensure directory exists (also self-heals on Render's ephemeral FS).
       if (!fs.existsSync(fullPath)) {
         fs.mkdirSync(fullPath, { recursive: true });
         console.log(`Created directory: ${fullPath}`);
       }
-      
-      console.log(`Upload destination: ${fullPath}`);
+
+      console.log(`Upload destination: ${fullPath} (category=${safeCategory})`);
       cb(null, fullPath);
     } catch (error) {
       console.error('Upload destination error:', error);
