@@ -199,18 +199,17 @@ const getBookingDocuments = async (req, res) => {
   }
 };
 
-// Get agent KYC documents
+// Get current user's KYC / personal documents.
+//
+// Originally agent-only, but the customer app's DocumentsScreen also lists
+// the customer's personal docs (Aadhaar / PAN / etc.) from this endpoint.
+// The where clause already scopes to req.user.id so cross-tenant access
+// isn't possible — the role gate was over-restrictive and made customers
+// see "Could not load saved documents".
 const getMyKycDocuments = async (req, res) => {
   try {
-    if (req.user.role !== 'agent') {
-      return res.status(403).json({
-        success: false,
-        message: 'Only representatives can view KYC documents'
-      });
-    }
-
     const documents = await Document.findAll({
-      where: { 
+      where: {
         user_id: req.user.id,
         category: 'kyc'
       },
