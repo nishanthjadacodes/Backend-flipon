@@ -29,6 +29,8 @@ import enquiryRoutes from './src/routes/enquiryRoutes.js';
 import vaultRoutes from './src/routes/vaultRoutes.js';
 import b2bReportsRoutes from './src/routes/b2bReportsRoutes.js';
 import walletRoutes from './src/routes/walletRoutes.js';
+import complianceRoutes from './src/routes/complianceRoutes.js';
+import { startComplianceAlertScheduler } from './src/jobs/complianceAlerts.js';
 
 const app = express();
 
@@ -160,6 +162,11 @@ app.use('/api/enquiries', enquiryRoutes);
 app.use('/api/vault', vaultRoutes);
 app.use('/api/admin/reports/b2b', b2bReportsRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/compliance', complianceRoutes);
+
+// Smart Alert system — daily-ish scan that pushes 90/60/30-day expiry
+// notifications for industrial customers' compliance documents.
+startComplianceAlertScheduler();
 
 // Health check endpoint
 app.get('/health', (req, res) => {

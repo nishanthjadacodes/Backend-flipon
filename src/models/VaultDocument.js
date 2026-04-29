@@ -70,6 +70,47 @@ const VaultDocument = sequelize.define('VaultDocument', {
   // Optional descriptive note (e.g. "Fire NOC renewal application — v2")
   note: { type: DataTypes.TEXT, allowNull: true },
 
+  // ─── Smart Alert / Compliance fields ─────────────────────────────────────
+  // Set when this vault row is a statutory document the factory owner needs
+  // to renew before it expires (Factory Licence, Fire NOC, Pollution NOC,
+  // GST certificate, etc.). NULL for normal vault docs.
+  compliance_type: {
+    type: DataTypes.ENUM(
+      'factory_license',
+      'fire_noc',
+      'pollution_noc',
+      'gst_certificate',
+      'incorporation',
+      'iso_cert',
+      'trade_license',
+      'esi_pf',
+      'other',
+    ),
+    allowNull: true,
+  },
+
+  // Date the document expires. The 90/60/30-day alert cron uses this column.
+  // NULL when not a compliance doc (regular vault uploads).
+  expiry_date: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+  },
+
+  // Last alert tier we already pushed for this document — used to dedupe
+  // notifications. Values: '90', '60', '30', or NULL (no alert sent yet).
+  last_alert_tier: {
+    type: DataTypes.STRING(10),
+    allowNull: true,
+  },
+
+  // Stamp of the last alert we sent. Cron skips a row if last_alert_sent_at
+  // is within 24h, even when a new tier becomes due (avoids notification
+  // spam if the cron over-runs).
+  last_alert_sent_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+
   created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
 }, {
@@ -82,6 +123,8 @@ const VaultDocument = sequelize.define('VaultDocument', {
     { fields: ['company_profile_id'] },
     { fields: ['customer_id'] },
     { fields: ['tier'] },
+    { fields: ['compliance_type'] },
+    { fields: ['expiry_date'] },
   ],
 });
 
