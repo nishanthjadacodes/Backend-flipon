@@ -118,13 +118,16 @@ const VaultDocument = sequelize.define('VaultDocument', {
   timestamps: true,
   createdAt: 'created_at',
   updatedAt: 'updated_at',
+  // NOTE: indexes on compliance_type / expiry_date are intentionally NOT
+  // declared here. Sequelize's Model.sync() tries to ADD INDEX even when the
+  // table already exists, which crashes the Render deploy if the production
+  // DB doesn't have the column yet (chicken-and-egg). Add these indexes via
+  // manual SQL once data scale warrants it.
   indexes: [
     { fields: ['enquiry_id'] },
     { fields: ['company_profile_id'] },
     { fields: ['customer_id'] },
     { fields: ['tier'] },
-    { fields: ['compliance_type'] },
-    { fields: ['expiry_date'] },
   ],
 });
 
