@@ -18,7 +18,7 @@ import {
   User,
   sequelize,
 } from '../models/index.js';
-import { uploadSingle, getFileUrl } from '../middleware/upload.js';
+import { uploadSingle, getFileUrl, getStoredFileValue } from '../middleware/upload.js';
 import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -175,7 +175,9 @@ export const uploadCompliance = [
         // For rep uploads this is the rep's id, not the customer's.
         uploaded_by: req.user.id,
         original_name: req.file.originalname,
-        stored_name: req.file.filename,
+        // Cloudinary returns a full URL; disk returns the basename. Either
+        // way, getFileUrl is idempotent so reads work the same.
+        stored_name: getStoredFileValue(req.file),
         mime_type: req.file.mimetype,
         plaintext_size: req.file.size,
         ciphertext_size: req.file.size,
@@ -355,17 +357,20 @@ export const renewCompliance = async (req, res) => {
 };
 
 // GET /api/compliance/:id/download — serve the file directly. Compliance
-// docs aren't encrypted (per design — they're the customer's own copies),
-// so we just stream from disk.
+// docs aren't encrypted (per design — they're the customer's own copies).
+// New rows store a Cloudinary URL in stored_name (we redirect to it);
+// legacy disk rows keep the basename and we stream from disk.
 export const downloadCompliance = async (req, res) => {
   try {
     const doc = await VaultDocument.findByPk(req.params.id);
     if (!doc || doc.customer_id !== req.user.id) {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
+    if (doc.stored_name && /^https?:\/\//i.test(String(doc.stored_name))) {
+      return res.redirect(302, doc.stored_name);
+    }
     const filePath = path.join(__dirname, '../../uploads/booking', doc.stored_name);
     if (!fs.existsSync(filePath)) {
-      // Try other category folders as a last resort (legacy uploads).
       const alt = ['documents', 'kyc'].map((c) =>
         path.join(__dirname, '../../uploads/', c, doc.stored_name),
       );

@@ -1,7 +1,7 @@
 import { Booking, User, Service, Document, Referral, sequelize } from '../models/index.js';
 import { Op } from 'sequelize';
 import { generateOTP } from '../utils/otpGenerator.js';
-import { getFileUrl } from '../middleware/upload.js';
+import { getFileUrl, getStoredFileValue } from '../middleware/upload.js';
 import { getIoInstance } from '../config/socket.js';
 import {
   sendBookingNotification,
@@ -930,10 +930,13 @@ const uploadDocument = async (req, res) => {
       });
     }
 
-    // Update government_documents with the uploaded file
+    // Update government_documents with the uploaded file. Cloudinary
+    // returns a full secure URL on file.path; disk returns the basename
+    // on file.filename — getStoredFileValue picks the right one.
+    const storedValue = getStoredFileValue(req.file);
     const currentDocuments = booking.government_documents || {};
     currentDocuments[docType] = {
-      filename: req.file.filename,
+      filename: storedValue,
       originalName: req.file.originalname,
       path: req.file.path,
       uploadedAt: new Date()
@@ -948,7 +951,7 @@ const uploadDocument = async (req, res) => {
       message: 'Document uploaded successfully',
       data: {
         documentType: docType,
-        filename: req.file.filename,
+        filename: storedValue,
         originalName: req.file.originalname
       }
     });

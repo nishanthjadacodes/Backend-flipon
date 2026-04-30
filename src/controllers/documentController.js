@@ -1,5 +1,5 @@
 import { Document, Booking, User } from '../models/index.js';
-import { uploadSingle, deleteFile, getFileUrl } from '../middleware/upload.js';
+import { uploadSingle, deleteFile, getFileUrl, getStoredFileValue } from '../middleware/upload.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { parseBoolean } from '../utils/booleanParser.js';
@@ -91,7 +91,10 @@ const uploadDocument = async (req, res) => {
         document_type: docType,
         category,
         file_name: req.file.originalname,
-        file_url: req.file.filename, // Store only filename
+        // With Cloudinary: full secure URL. With disk fallback: just the
+        // basename. getFileUrl is idempotent on full URLs so reads work
+        // either way.
+        file_url: getStoredFileValue(req.file),
         file_size: req.file.size,
         mime_type: req.file.mimetype,
         uploaded_by: req.user.id,

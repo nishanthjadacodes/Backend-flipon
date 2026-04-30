@@ -2,15 +2,57 @@ import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { v2 as cloudinary } from 'cloudinary';
+import { CloudinaryStorage } from 'multer-storage-cloudinary';
 
-// Get current directory for ES6 modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Cloudinary is the durable store. Render's free tier wipes the disk on
+// every cold restart, which broke doc previews after a few hours. With
+// CLOUDINARY_* env vars set, multer streams uploads straight to Cloudinary
+// and we store the secure_url in the DB row.
+//
+// Required env vars (set on Render → flipon-backend → Environment):
+//   CLOUDINARY_CLOUD_NAME
+//   CLOUDINARY_API_KEY
+//   CLOUDINARY_API_SECRET
+//
+// If any is missing we fall back to local disk storage (good for dev, bad
+// for Render free tier — see warning logged at boot).
+const CLOUDINARY_ENABLED = !!(
+  process.env.CLOUDINARY_CLOUD_NAME &&
+  process.env.CLOUDINARY_API_KEY &&
+  process.env.CLOUDINARY_API_SECRET
+);
+
+if (CLOUDINARY_ENABLED) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+    secure: true,
+  });
+  console.log('[upload] Cloudinary storage active — uploads persist across dyno restarts');
+} else {
+  console.warn(
+    '[upload] Cloudinary not configured — falling back to local disk. ' +
+      'On Render free tier this means uploads are lost on every cold-start. ' +
+      'Set CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET to enable.'
+  );
+}
 
 // Allowed category folders. Anything else falls back to 'documents'.
 const ALLOWED_CATEGORIES = new Set(['documents', 'kyc', 'booking', 'temp', 'enquiry']);
 
-// Create upload directories if they don't exist
+const safeCategoryFor = (req) => {
+  const requested = String(
+    req.body?.category || req.body?.Category || 'booking'
+  ).toLowerCase();
+  return ALLOWED_CATEGORIES.has(requested) ? requested : 'documents';
+};
+
+// ─── Disk storage (fallback for dev) ──────────────────────────────────────
 const createUploadDirs = () => {
   const dirs = [
     'uploads',
@@ -20,8 +62,7 @@ const createUploadDirs = () => {
     'uploads/temp',
     'uploads/enquiry',
   ];
-
-  dirs.forEach(dir => {
+  dirs.forEach((dir) => {
     const fullPath = path.join(__dirname, '../../', dir);
     if (!fs.existsSync(fullPath)) {
       fs.mkdirSync(fullPath, { recursive: true });
@@ -29,41 +70,17 @@ const createUploadDirs = () => {
     }
   });
 };
+if (!CLOUDINARY_ENABLED) createUploadDirs();
 
-// Initialize upload directories
-createUploadDirs();
-
-// Storage configuration
-const storage = multer.diskStorage({
+const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     try {
-      // Use the EXPLICIT category from the request body. The disk path must
-      // match the DB row's `category` column — otherwise getFileUrl builds
-      // a URL pointing at the wrong folder and the image 404s.
-      //
-      // Previously this auto-routed aadhaar/pan/profile uploads to /kyc/
-      // regardless of the body category, which caused the booking flow's
-      // doc previews to 404 (DB said /booking/ but file was in /kyc/).
-      // Default to 'booking' to match documentController's `category = 'booking'`
-      // destructuring default — keeps multer's disk path in sync with the
-      // category written to the DB row.
-      const requestedCategory = String(
-        req.body.category || req.body.Category || 'booking'
-      ).toLowerCase();
-      const safeCategory = ALLOWED_CATEGORIES.has(requestedCategory)
-        ? requestedCategory
-        : 'documents';
+      const safeCategory = safeCategoryFor(req);
       const uploadPath = `uploads/${safeCategory}`;
-
       const fullPath = path.join(__dirname, '../../', uploadPath);
-
-      // Ensure directory exists (also self-heals on Render's ephemeral FS).
       if (!fs.existsSync(fullPath)) {
         fs.mkdirSync(fullPath, { recursive: true });
-        console.log(`Created directory: ${fullPath}`);
       }
-
-      console.log(`Upload destination: ${fullPath} (category=${safeCategory})`);
       cb(null, fullPath);
     } catch (error) {
       console.error('Upload destination error:', error);
@@ -71,24 +88,47 @@ const storage = multer.diskStorage({
     }
   },
   filename: (req, file, cb) => {
-    // Generate unique filename: timestamp-random-originalname
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 8);
     const ext = path.extname(file.originalname);
-    const filename = `${timestamp}-${random}${ext}`;
-    cb(null, filename);
-  }
+    cb(null, `${timestamp}-${random}${ext}`);
+  },
 });
 
-// File filter — accept any common document, image, or office file type.
-// Blocks executable/script extensions for safety. New types added here are
-// available immediately to /documents/upload and KYC upload.
+// ─── Cloudinary storage ───────────────────────────────────────────────────
+// Stores under `flipon/<category>/`. resource_type is 'auto' so PDFs,
+// images and other files all upload through one config (Cloudinary serves
+// PDFs as-is; images get its CDN treatment). public_id is unique per
+// upload to avoid name collisions.
+const cloudinaryStorage = CLOUDINARY_ENABLED
+  ? new CloudinaryStorage({
+      cloudinary,
+      params: async (req, file) => {
+        const safeCategory = safeCategoryFor(req);
+        const timestamp = Date.now();
+        const random = Math.random().toString(36).substring(2, 8);
+        const baseName = path
+          .basename(file.originalname, path.extname(file.originalname))
+          .replace(/[^a-zA-Z0-9_-]/g, '_')
+          .substring(0, 40);
+        return {
+          folder: `flipon/${safeCategory}`,
+          public_id: `${timestamp}-${random}-${baseName}`,
+          resource_type: 'auto',
+        };
+      },
+    })
+  : null;
+
+const storage = CLOUDINARY_ENABLED ? cloudinaryStorage : diskStorage;
+
+// ─── File filter — block executables, accept everything else ──────────────
 const BLOCKED_EXTS = new Set([
   '.exe', '.bat', '.cmd', '.sh', '.ps1', '.vbs', '.scr', '.com',
   '.msi', '.app', '.apk', '.jar', '.dll', '.so',
 ]);
 
-const fileFilter = (req, file, cb) => {
+const fileFilter = (_req, file, cb) => {
   try {
     const ext = path.extname(file.originalname || '').toLowerCase();
     if (BLOCKED_EXTS.has(ext)) {
@@ -101,17 +141,15 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// Multer configuration
 const uploadConfig = {
   storage,
   fileFilter,
   limits: {
-    fileSize: 20 * 1024 * 1024, // 20MB — handles scans, multi-page PDFs, slides
+    fileSize: 20 * 1024 * 1024,
     files: 10,
   },
 };
 
-// Create upload middleware instances
 export const uploadSingle = multer(uploadConfig).single('file');
 export const uploadMultiple = multer(uploadConfig).array('files', 10);
 export const uploadKYC = multer(uploadConfig).fields([
@@ -119,33 +157,48 @@ export const uploadKYC = multer(uploadConfig).fields([
   { name: 'aadhaar_back', maxCount: 1 },
   { name: 'pan_card', maxCount: 1 },
   { name: 'profile_photo', maxCount: 1 },
-  { name: 'address_proof', maxCount: 1 }
+  { name: 'address_proof', maxCount: 1 },
 ]);
 
-// Utility function to delete file
-export const deleteFile = (filePath) => {
+// Pull the right "where it lives" value out of the multer File object.
+// - Cloudinary: file.path is the secure CDN URL; file.filename is the public_id.
+// - Disk:       file.filename is just the basename; file.path is the local disk path.
+// Controllers should call this and store the returned value in DB.file_url —
+// then getFileUrl will return it as-is on read (idempotent for full URLs).
+export const getStoredFileValue = (file) => {
+  if (!file) return null;
+  if (CLOUDINARY_ENABLED) {
+    // multer-storage-cloudinary puts the secure_url on file.path.
+    return file.path || file.secure_url || file.filename;
+  }
+  return file.filename;
+};
+
+// ─── Delete (best-effort) ─────────────────────────────────────────────────
+export const deleteFile = async (storedValue) => {
   try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      console.log(`File deleted: ${filePath}`);
+    if (!storedValue) return;
+    if (CLOUDINARY_ENABLED && /^https?:\/\//i.test(String(storedValue))) {
+      // Extract public_id from the Cloudinary URL: everything after /upload/
+      // up to the file extension. Skip any version segment (e.g. /v123456/).
+      const m = String(storedValue).match(/\/upload\/(?:v\d+\/)?(.+?)(?:\.[a-zA-Z0-9]+)?$/);
+      const publicId = m && m[1];
+      if (publicId) {
+        await cloudinary.uploader.destroy(publicId, { resource_type: 'auto' });
+        console.log(`Cloudinary file deleted: ${publicId}`);
+      }
+      return;
+    }
+    if (fs.existsSync(storedValue)) {
+      fs.unlinkSync(storedValue);
+      console.log(`File deleted: ${storedValue}`);
     }
   } catch (error) {
     console.error('Error deleting file:', error);
   }
 };
 
-// Utility function to get file URL.
-//
-// Order of precedence for the host:
-//   1. BASE_URL                      — explicit override (recommended for prod)
-//   2. RENDER_EXTERNAL_URL           — full URL Render auto-injects
-//   3. RENDER_EXTERNAL_HOSTNAME      — hostname-only Render fallback
-//   4. detected from request (req)   — when caller passes the request object
-//   5. localhost:<port>              — local dev fallback
-// Detect which `uploads/<category>/` folder actually contains the file.
-// Old uploads predate the multer category-fix, so the DB row may say
-// `category=booking` while the file is physically in `uploads/kyc/`.
-// We probe in priority order and return the first hit.
+// ─── Disk probe (legacy rows only — Cloudinary URLs skip this) ────────────
 const PROBE_CATEGORIES = ['booking', 'documents', 'kyc', 'temp', 'enquiry'];
 const resolveActualCategory = (fileName, claimedCategory) => {
   if (!fileName) return claimedCategory;
@@ -160,58 +213,43 @@ const resolveActualCategory = (fileName, claimedCategory) => {
       if (fs.existsSync(filePath)) return c;
     } catch (_) { /* continue probing */ }
   }
-  // No physical file found — return the claimed category so the URL still
-  // forms (frontend will surface a 404 with the original-category path,
-  // which is what we want for diagnostics).
   return claimedCategory;
 };
 
+// ─── Read-side URL formation ──────────────────────────────────────────────
+// Idempotent: full URLs (http/https) pass through unchanged — covers
+// Cloudinary URLs and any legacy rows that stored full URLs.
+// Disk rows (basename only) get the BASE_URL → /uploads/<cat>/<file> prefix.
 export const getFileUrl = (fileName, category = 'documents', req = null) => {
   if (!fileName) return fileName;
 
-  // Idempotent — if the value already looks like a full URL, return it
-  // unchanged. Prevents double-prefixing on legacy rows that stored the
-  // full URL in `file_url` instead of just the basename.
   if (/^https?:\/\//i.test(String(fileName))) {
     return String(fileName);
   }
 
   let baseUrl = process.env.BASE_URL;
-
   if (!baseUrl && process.env.RENDER_EXTERNAL_URL) {
     baseUrl = process.env.RENDER_EXTERNAL_URL;
   }
-
   if (!baseUrl && process.env.RENDER_EXTERNAL_HOSTNAME) {
     baseUrl = `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`;
   }
-
-  // Last resort — derive from the incoming request if the caller supplied it.
   if (!baseUrl && req && req.headers) {
     const host = req.headers['x-forwarded-host'] || req.headers.host;
     const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
     if (host) baseUrl = `${proto}://${host}`;
   }
-
   if (!baseUrl) {
     baseUrl = `http://localhost:${process.env.PORT || 3001}`;
   }
 
-  // Strip any embedded path components from the stored value. Some legacy
-  // rows have `uploads/booking/abc.jpg` baked into file_url; we want just
-  // the basename so the URL doesn't get a duplicated `uploads/booking/`.
   const justName =
     String(fileName)
-      .replace(/^\/+/, '')                 // leading slashes
-      .replace(/^uploads\/[^/]+\//i, '')   // "uploads/<cat>/"
+      .replace(/^\/+/, '')
+      .replace(/^uploads\/[^/]+\//i, '')
       .split('/')
       .pop() || '';
 
-  // Probe the disk to find the folder that actually contains the file —
-  // handles legacy rows where the multer destination didn't match the
-  // category column. Falls back to the claimed category if nothing is
-  // found (so the URL still forms; the frontend gets a clean 404 to
-  // surface in its error UI).
   const resolvedCategory = resolveActualCategory(justName, category);
   return `${baseUrl}/uploads/${resolvedCategory}/${justName}`;
 };
@@ -221,5 +259,6 @@ export default {
   uploadMultiple,
   uploadKYC,
   deleteFile,
-  getFileUrl
+  getFileUrl,
+  getStoredFileValue,
 };

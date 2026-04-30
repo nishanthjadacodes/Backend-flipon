@@ -1,5 +1,5 @@
 import { User, Document, AgentKyc } from '../models/index.js';
-import { uploadKYC, getFileUrl } from '../middleware/upload.js';
+import { uploadKYC, getFileUrl, getStoredFileValue } from '../middleware/upload.js';
 import { sequelize } from '../config/database.js';
 
 // Submit KYC documents (Agent only)
@@ -39,7 +39,9 @@ const submitKyc = async (req, res) => {
           document_type: docType,
           category: 'kyc',
           file_name: file.originalname,
-          file_url: file.filename,
+          // Cloudinary returns the full secure URL; disk returns just the
+          // basename. getFileUrl is idempotent on URLs so reads work either way.
+          file_url: getStoredFileValue(file),
           file_size: file.size,
           mime_type: file.mimetype,
           uploaded_by: req.user.id
