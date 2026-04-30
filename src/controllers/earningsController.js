@@ -1,88 +1,86 @@
 import { Booking, User, Service } from '../models/index.js';
 
-// Get agent earnings
+// Get representative earnings — real numbers, no mock multipliers.
+// Response shape matches what the rep app's EarningsScreen expects:
+//   { success, earnings: EarningRecord[], total, today, week, summary }
 const getAgentEarnings = async (req, res) => {
   try {
     const agentId = req.user.id;
-    
-    // Get completed bookings for the agent
+
     const completedBookings = await Booking.findAll({
-      where: { 
+      where: {
         agent_id: agentId,
-        status: 'completed'
+        status: 'completed',
       },
       include: [
-        {
-          model: User,
-          as: 'customer',
-          attributes: ['id', 'name', 'mobile']
-        },
+        { model: User, as: 'customer', attributes: ['id', 'name', 'mobile'] },
         {
           model: Service,
           as: 'service',
-          attributes: ['id', 'name', 'partner_earning']
-        }
+          attributes: ['id', 'name', 'partner_earning', 'user_cost'],
+        },
       ],
-      order: [['completed_at', 'DESC']]
+      order: [['completed_at', 'DESC']],
     });
 
-    // Calculate earnings
-    const totalEarnings = completedBookings.reduce((sum, booking) => {
-      return sum + (booking.service?.partner_earning || 0);
-    }, 0);
+    const now = new Date();
+    const todayStr = now.toDateString();
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const todayEarnings = completedBookings.filter(booking => {
-      const today = new Date();
-      const bookingDate = new Date(booking.completed_at);
-      return bookingDate.toDateString() === today.toDateString();
-    }).reduce((sum, booking) => {
-      return sum + (booking.service?.partner_earning || 0);
-    }, 0);
+    // Per-booking commission = service.partner_earning. Coerce to Number
+    // since Sequelize returns DECIMAL columns as strings.
+    const commissionFor = (b) =>
+      Number(b.service?.partner_earning || 0);
 
-    // Create transaction history
-    const transactions = completedBookings.map(booking => ({
-      id: booking.id,
-      type: 'earning',
-      amount: booking.service?.partner_earning || 0,
-      description: `Service: ${booking.service?.name || 'Unknown'}`,
-      customer: booking.customer?.name || 'Unknown',
-      date: booking.completed_at,
-      status: 'completed'
+    const totalAmountFor = (b) =>
+      Number(b.price_quoted || b.service?.user_cost || 0);
+
+    // Each row represents one completed booking the rep earned commission on.
+    const earnings = completedBookings.map((b) => ({
+      id: b.id,
+      taskId: String(b.id || '').substring(0, 8),
+      customerName: b.customer?.name || 'Customer',
+      serviceName: b.service?.name || 'Service',
+      amount: totalAmountFor(b),         // gross booking value
+      commission: commissionFor(b),      // rep's actual earning
+      date: b.completed_at || b.updated_at || b.created_at,
+      status: 'completed',
+      paymentStatus: b.payment_status || 'paid',
     }));
 
-    // Mock commission breakdown
-    const commissionBreakdown = {
-      totalEarnings,
-      totalJobs: completedBookings.length,
-      averageEarningPerJob: completedBookings.length > 0 ? totalEarnings / completedBookings.length : 0,
-      todayEarnings,
-      thisWeekEarnings: totalEarnings * 0.3, // Mock calculation
-      thisMonthEarnings: totalEarnings * 0.8, // Mock calculation
-      pendingSettlements: 0, // Mock data
-      lastSettlement: '2024-04-01', // Mock data
-      nextSettlement: '2024-05-01' // Mock data
-    };
+    const sum = (arr) => arr.reduce((s, e) => s + (Number(e.commission) || 0), 0);
+    const inRange = (e, since) => new Date(e.date) >= since;
+
+    const total = sum(earnings);
+    const today = sum(earnings.filter((e) => new Date(e.date).toDateString() === todayStr));
+    const week = sum(earnings.filter((e) => inRange(e, weekAgo)));
+    const month = sum(earnings.filter((e) => inRange(e, monthAgo)));
+
+    const totalJobs = earnings.length;
+    const averageEarningPerJob = totalJobs > 0 ? total / totalJobs : 0;
 
     res.json({
       success: true,
-      earnings: commissionBreakdown,
-      transactions: transactions,
+      earnings,
+      total,
+      today,
+      week,
+      month,
       summary: {
-        totalEarnings,
-        totalJobs: completedBookings.length,
-        todayEarnings,
-        pendingSettlements: 0
-      }
+        totalEarnings: total,
+        totalJobs,
+        averageEarningPerJob,
+        todayEarnings: today,
+        thisWeekEarnings: week,
+        thisMonthEarnings: month,
+        pendingSettlements: 0,
+      },
     });
   } catch (error) {
-    console.error('Error getting agent earnings:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get earnings'
-    });
+    console.error('Error getting representative earnings:', error);
+    res.status(500).json({ success: false, message: 'Failed to get earnings' });
   }
 };
 
-export {
-  getAgentEarnings
-};
+export { getAgentEarnings };
