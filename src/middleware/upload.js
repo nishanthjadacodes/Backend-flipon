@@ -167,6 +167,15 @@ const resolveActualCategory = (fileName, claimedCategory) => {
 };
 
 export const getFileUrl = (fileName, category = 'documents', req = null) => {
+  if (!fileName) return fileName;
+
+  // Idempotent — if the value already looks like a full URL, return it
+  // unchanged. Prevents double-prefixing on legacy rows that stored the
+  // full URL in `file_url` instead of just the basename.
+  if (/^https?:\/\//i.test(String(fileName))) {
+    return String(fileName);
+  }
+
   let baseUrl = process.env.BASE_URL;
 
   if (!baseUrl && process.env.RENDER_EXTERNAL_URL) {
@@ -188,13 +197,23 @@ export const getFileUrl = (fileName, category = 'documents', req = null) => {
     baseUrl = `http://localhost:${process.env.PORT || 3001}`;
   }
 
+  // Strip any embedded path components from the stored value. Some legacy
+  // rows have `uploads/booking/abc.jpg` baked into file_url; we want just
+  // the basename so the URL doesn't get a duplicated `uploads/booking/`.
+  const justName =
+    String(fileName)
+      .replace(/^\/+/, '')                 // leading slashes
+      .replace(/^uploads\/[^/]+\//i, '')   // "uploads/<cat>/"
+      .split('/')
+      .pop() || '';
+
   // Probe the disk to find the folder that actually contains the file —
   // handles legacy rows where the multer destination didn't match the
   // category column. Falls back to the claimed category if nothing is
   // found (so the URL still forms; the frontend gets a clean 404 to
   // surface in its error UI).
-  const resolvedCategory = resolveActualCategory(fileName, category);
-  return `${baseUrl}/uploads/${resolvedCategory}/${fileName}`;
+  const resolvedCategory = resolveActualCategory(justName, category);
+  return `${baseUrl}/uploads/${resolvedCategory}/${justName}`;
 };
 
 export default {
