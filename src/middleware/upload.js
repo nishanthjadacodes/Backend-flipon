@@ -142,6 +142,30 @@ export const deleteFile = (filePath) => {
 //   3. RENDER_EXTERNAL_HOSTNAME      — hostname-only Render fallback
 //   4. detected from request (req)   — when caller passes the request object
 //   5. localhost:<port>              — local dev fallback
+// Detect which `uploads/<category>/` folder actually contains the file.
+// Old uploads predate the multer category-fix, so the DB row may say
+// `category=booking` while the file is physically in `uploads/kyc/`.
+// We probe in priority order and return the first hit.
+const PROBE_CATEGORIES = ['booking', 'documents', 'kyc', 'temp', 'enquiry'];
+const resolveActualCategory = (fileName, claimedCategory) => {
+  if (!fileName) return claimedCategory;
+  const tryOrder = [
+    claimedCategory,
+    ...PROBE_CATEGORIES.filter((c) => c !== claimedCategory),
+  ];
+  for (const c of tryOrder) {
+    if (!c) continue;
+    const filePath = path.join(__dirname, '../../uploads/', c, fileName);
+    try {
+      if (fs.existsSync(filePath)) return c;
+    } catch (_) { /* continue probing */ }
+  }
+  // No physical file found — return the claimed category so the URL still
+  // forms (frontend will surface a 404 with the original-category path,
+  // which is what we want for diagnostics).
+  return claimedCategory;
+};
+
 export const getFileUrl = (fileName, category = 'documents', req = null) => {
   let baseUrl = process.env.BASE_URL;
 
@@ -164,7 +188,13 @@ export const getFileUrl = (fileName, category = 'documents', req = null) => {
     baseUrl = `http://localhost:${process.env.PORT || 3001}`;
   }
 
-  return `${baseUrl}/uploads/${category}/${fileName}`;
+  // Probe the disk to find the folder that actually contains the file —
+  // handles legacy rows where the multer destination didn't match the
+  // category column. Falls back to the claimed category if nothing is
+  // found (so the URL still forms; the frontend gets a clean 404 to
+  // surface in its error UI).
+  const resolvedCategory = resolveActualCategory(fileName, category);
+  return `${baseUrl}/uploads/${resolvedCategory}/${fileName}`;
 };
 
 export default {
