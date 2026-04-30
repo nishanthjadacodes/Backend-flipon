@@ -14,8 +14,14 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
 const SIX_HOURS_MS = 6 * ONE_HOUR_MS;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 
-// Alert tiers, ordered most-imminent first. The cron picks the highest-tier
-// alert that hasn't yet been sent for a given document.
+// 30-60-90 day alert ladder — wording matches the FliponeX product spec:
+//   90 d (soft early warning)  → "expires in 3 months. Should we start the documentation?"
+//   60 d (action reminder)     → "Time to prepare! FliponeX experts are ready to assist..."
+//   30 d (critical red alert)  → "Action Required Immediately to avoid penalties!"
+//
+// The cron picks the most-imminent tier that hasn't yet been sent for a
+// given document, so each row gets exactly three notifications across its
+// pre-expiry window.
 const TIERS = [
   {
     key: '30',
@@ -23,23 +29,23 @@ const TIERS = [
     daysMax: 30,
     title: '🚨 Action Required Immediately',
     body: (label) =>
-      `${label} expires in under 30 days. Tap to renew via FliponeX and avoid penalties.`,
+      `${label} expires in under 30 days — Action Required Immediately to avoid penalties! Tap to renew via FliponeX.`,
   },
   {
     key: '60',
     daysMin: 30,
     daysMax: 60,
-    title: '⏳ Renewal Reminder',
+    title: '⏳ Time to prepare',
     body: (label) =>
-      `${label} expires in 60 days. FliponeX experts are ready to handle the renewal.`,
+      `${label} expires in 60 days. Time to prepare — FliponeX experts are ready to assist with your renewal.`,
   },
   {
     key: '90',
     daysMin: 60,
     daysMax: 90,
-    title: '📅 Early Warning',
+    title: '📅 Early warning',
     body: (label) =>
-      `${label} expires in 90 days. Should we start the documentation now?`,
+      `Your ${label} expires in 3 months. Should we start the documentation now?`,
   },
 ];
 

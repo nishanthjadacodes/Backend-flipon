@@ -105,12 +105,21 @@ export const listCompliance = async (req, res) => {
 };
 
 // POST /api/compliance/upload — multipart upload with expiry_date.
+//
+// Two callers per spec ("agent or client enters the expiry date"):
+//
+//   1. Customer uploading their own doc — req.user.role === 'customer'.
+//      `customer_id` from req.user.id; profile looked up from req.user.id.
+//
+//   2. Representative uploading on behalf of a customer (e.g., during a
+//      Fire NOC renewal visit) — req.user.role === 'agent' (or admin).
+//      Caller must include `customer_id` in the body. We trust the caller's
+//      expiry_date entry as the authoritative renewal date.
+//
 // Reuses the standard `uploadSingle` middleware so file lands in
-// /uploads/<category>/. We only persist metadata + expiry; encryption
-// is intentionally NOT applied here (these are the user's own docs they
-// will preview/download from the app), to keep the customer-facing flow
-// simple. Sensitive admin-issued docs still go through the encrypted
-// /api/vault/upload path.
+// /uploads/<category>/. Encryption is NOT applied here (these are the
+// customer's own copies they preview from the app). Sensitive admin-issued
+// docs still go through the encrypted /api/vault/upload path.
 export const uploadCompliance = [
   // first run the multer middleware
   uploadSingle,
@@ -119,7 +128,7 @@ export const uploadCompliance = [
       if (!req.file) {
         return res.status(400).json({ success: false, message: 'No file uploaded' });
       }
-      const { compliance_type, expiry_date, note } = req.body;
+      const { compliance_type, expiry_date, note, customer_id: bodyCustomerId } = req.body;
       if (!compliance_type) {
         return res.status(400).json({ success: false, message: 'compliance_type is required' });
       }
@@ -127,13 +136,31 @@ export const uploadCompliance = [
         return res.status(400).json({ success: false, message: 'expiry_date is required' });
       }
 
-      const profile = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
+      // Decide whose document this is.
+      // - 'agent' / admin roles can pass an explicit customer_id to upload
+      //   on the customer's behalf.
+      // - Everyone else (the typical customer-app caller) uploads for self.
+      const STAFF_ROLES = new Set([
+        'agent',
+        'super_admin',
+        'operations_manager',
+        'b2b_admin',
+        'finance_admin',
+        'customer_support',
+      ]);
+      const isStaff = STAFF_ROLES.has(String(req.user?.role || ''));
+      const targetCustomerId =
+        isStaff && bodyCustomerId ? bodyCustomerId : req.user.id;
+
+      const profile = await CompanyProfile.findOne({ where: { user_id: targetCustomerId } });
       if (!profile) {
         // Clean up the orphan file if profile is missing.
         try { fs.unlinkSync(req.file.path); } catch (_) {}
         return res.status(400).json({
           success: false,
-          message: 'Fill your company profile before uploading compliance documents.',
+          message: isStaff && bodyCustomerId
+            ? "This customer hasn't filled their company profile yet — they need to do that before you can upload compliance docs on their behalf."
+            : 'Fill your company profile before uploading compliance documents.',
         });
       }
 
@@ -143,7 +170,9 @@ export const uploadCompliance = [
       const doc = await VaultDocument.create({
         enquiry_id: null,
         company_profile_id: profile.id,
-        customer_id: req.user.id,
+        customer_id: targetCustomerId,
+        // uploaded_by always tracks who actually pressed Upload (audit trail).
+        // For rep uploads this is the rep's id, not the customer's.
         uploaded_by: req.user.id,
         original_name: req.file.originalname,
         stored_name: req.file.filename,
@@ -230,23 +259,79 @@ export const renewCompliance = async (req, res) => {
 
     const service = candidate || fallback;
 
+    // Auto-assign an available representative so they get instantly pinged
+    // to call the customer and schedule pickup. Preference order:
+    //   1. Online + active + KYC-verified rep (best — immediately available)
+    //   2. Active + KYC-verified rep (good — they'll see it on next app open)
+    //   3. None (admin will assign manually from B2B Pipeline)
+    let autoAssignedRep = null;
+    try {
+      autoAssignedRep =
+        (await User.findOne({
+          where: {
+            role: 'agent',
+            is_active: true,
+            is_kyc_verified: true,
+            online_status: true,
+          },
+          order: [['rating', 'DESC'], ['total_jobs_completed', 'DESC']],
+        })) ||
+        (await User.findOne({
+          where: { role: 'agent', is_active: true, is_kyc_verified: true },
+          order: [['rating', 'DESC'], ['total_jobs_completed', 'DESC']],
+        }));
+    } catch (e) {
+      console.warn('[compliance/renew] auto-assign lookup failed:', e?.message);
+    }
+
     const enquiry = await Enquiry.create({
       service_id: service ? service.id : null,
       customer_id: req.user.id,
       company_profile_id: profile.id,
       notes:
         `Renewal request for ${label}. Current document expires on ${doc.expiry_date}. ` +
-        `Triggered via Compliance Vault → "Renew via FliponeX".`,
+        `Triggered via Compliance Vault → "Renew via FliponeX". ` +
+        `Auto-assigned rep: ${autoAssignedRep ? autoAssignedRep.name || autoAssignedRep.id : 'none yet (admin to assign)'}.`,
       urgency: 'high',
       preferred_contact_time: null,
-      status: 'new',
+      status: autoAssignedRep ? 'reviewing' : 'new',
+      assigned_admin_id: autoAssignedRep ? autoAssignedRep.id : null,
     });
+
+    // Push-notify the assigned rep so they call back immediately. Wrapped in
+    // try/catch — never fail the renewal if the push gateway is down.
+    if (autoAssignedRep) {
+      try {
+        const { sendPushNotification } = await import('../services/notificationService.js');
+        await sendPushNotification(autoAssignedRep.id, {
+          title: '🔔 New Compliance Renewal Lead',
+          message: `${label} renewal needed. Customer is waiting — call to schedule pickup.`,
+          data: {
+            type: 'compliance_renewal_lead',
+            enquiry_id: enquiry.id,
+            compliance_type: doc.compliance_type,
+            customer_id: req.user.id,
+          },
+          priority: 'high',
+        });
+      } catch (e) {
+        console.warn('[compliance/renew] push to rep failed:', e?.message);
+      }
+    }
+
+    const repName = autoAssignedRep
+      ? autoAssignedRep.name || 'Your assigned representative'
+      : null;
 
     res.status(201).json({
       success: true,
       data: enquiry,
-      message:
-        `Renewal enquiry created. A FliponeX representative will reach out shortly to schedule pickup.`,
+      autoAssignedRep: autoAssignedRep
+        ? { id: autoAssignedRep.id, name: autoAssignedRep.name, mobile: autoAssignedRep.mobile }
+        : null,
+      message: repName
+        ? `${repName} has been assigned and will call you shortly to schedule document pickup.`
+        : `Renewal logged. A FliponeX representative will reach out shortly to schedule pickup.`,
     });
   } catch (e) {
     console.error('renewCompliance error:', e);
