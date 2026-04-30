@@ -458,6 +458,18 @@ const getBookingDetails = async (req, res) => {
       }));
     }
 
+    // Strip the completion OTP from the response unless the caller is the
+    // customer themselves OR the assigned rep — both legitimately need it
+    // to drive the dev-mode flow on the rep app. Admins don't need it via
+    // this endpoint.
+    if (
+      booking.customer_id !== req.user.id &&
+      booking.agent_id !== req.user.id
+    ) {
+      delete responseBody.completion_otp;
+      delete responseBody.completion_otp_generated_at;
+    }
+
     res.json({
       success: true,
       data: responseBody,
@@ -607,17 +619,23 @@ const updateJobStatus = async (req, res) => {
       updates.documents_collected_at = new Date();
     }
 
-    if (status === 'submitted' || status === 'work_completed') {
+    // When the rep finishes the work (work_completed/submitted/completed),
+    // generate the completion OTP. The customer reads this OTP off their
+    // app/SMS and tells it to the rep, who enters it to close the booking.
+    // We generate it once — re-using the existing OTP if the rep retries.
+    if (
+      status === 'submitted' ||
+      status === 'work_completed' ||
+      status === 'completed'
+    ) {
       if (submission_details) updates.submission_details = submission_details;
       updates.submitted_at = new Date();
-    }
-
-    if (status === 'completed') {
-      // Generate completion OTP
-      const completionOTP = generateOTP();
-      updates.completion_otp = completionOTP;
-      updates.completion_otp_generated_at = new Date();
-      console.log(`Completion OTP for booking ${id}: ${completionOTP}`);
+      if (!booking.completion_otp) {
+        const completionOTP = generateOTP();
+        updates.completion_otp = completionOTP;
+        updates.completion_otp_generated_at = new Date();
+        console.log(`Completion OTP for booking ${id}: ${completionOTP}`);
+      }
     }
 
     // Append a progress note for sub-steps that don't change DB status (so
@@ -631,9 +649,15 @@ const updateJobStatus = async (req, res) => {
 
     await booking.update(updates);
 
+    // Surface the completion OTP back to the rep so dev/demo flows work
+    // even when push/SMS delivery to the customer isn't configured. The
+    // assigned rep can see the code and complete the booking. This is
+    // intentionally returned only to the assigned rep (`booking.agent_id ===
+    // req.user.id` was already checked above, so we're safe).
     res.json({
       success: true,
       data: booking,
+      completion_otp: booking.completion_otp || null,
       message: `Job status updated to ${status} successfully`
     });
 
@@ -704,17 +728,26 @@ const verifyCompletionOTP = async (req, res) => {
       });
     }
 
-    if (booking.customer_id !== req.user.id) {
+    // Either the customer (entering the OTP themselves) or the assigned
+    // rep (entering the OTP the customer just read off their phone) can
+    // close the booking. Backend trust: the OTP itself is the secret.
+    if (
+      booking.customer_id !== req.user.id &&
+      booking.agent_id !== req.user.id
+    ) {
       return res.status(403).json({
         success: false,
-        message: 'Only customer can verify completion'
+        message: 'Only the customer or the assigned representative can verify completion'
       });
     }
 
-    if (booking.status !== 'completed') {
+    // Once the rep has marked the work as done (status='submitted' or
+    // 'completed'), an OTP exists and verification is allowed. Earlier
+    // statuses can't verify yet.
+    if (booking.status !== 'completed' && booking.status !== 'submitted') {
       return res.status(400).json({
         success: false,
-        message: 'Booking must be completed before verification'
+        message: 'Mark the work as completed before entering the OTP'
       });
     }
 
@@ -726,9 +759,11 @@ const verifyCompletionOTP = async (req, res) => {
     }
 
     const updates = {
+      status: 'completed',
+      completed_at: new Date(),
       completion_verified_at: new Date(),
       customer_rating: rating,
-      customer_feedback: feedback
+      customer_feedback: feedback,
     };
 
     await booking.update(updates);
