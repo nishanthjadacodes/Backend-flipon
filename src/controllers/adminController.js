@@ -164,7 +164,7 @@ const getAllUsers = async (req, res) => {
 const updateUserStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { is_active, is_verified } = req.body;
+    const { is_active, is_verified, is_kyc_verified } = req.body;
 
     const user = await User.findByPk(id);
 
@@ -178,6 +178,13 @@ const updateUserStatus = async (req, res) => {
     const updates = {};
     if (typeof is_active === 'boolean') updates.is_active = is_active;
     if (typeof is_verified === 'boolean') updates.is_verified = is_verified;
+    // is_kyc_verified — admin can flip this directly so reps without a
+    // formal AgentKyc submission can still be marked as verified for
+    // assignment (e.g., onboarded out-of-band, training reps, etc.).
+    if (typeof is_kyc_verified === 'boolean') {
+      updates.is_kyc_verified = is_kyc_verified;
+      if (is_kyc_verified) updates.kyc_verified_at = new Date();
+    }
 
     await user.update(updates);
 
