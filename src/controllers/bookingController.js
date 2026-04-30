@@ -234,7 +234,7 @@ const createBooking = async (req, res) => {
         createdBy: req.user.name,
         timestamp: new Date()
       });
-      
+
       io.to(`user_${booking.customer_id}`).emit('booking_confirmed', {
         bookingId: booking.id,
         serviceId: booking.service_id,
@@ -243,6 +243,63 @@ const createBooking = async (req, res) => {
         timestamp: new Date()
       });
     }
+
+    // Push notifications — fire-and-forget so we don't delay the response.
+    // Sends a phone push to:
+    //   1. All active admins (any admin role)  → Order Management lead
+    //   2. All available representatives        → broadcast new-job alert
+    // The dashboard's 20-s polling separately ensures the new row shows
+    // even if push delivery is slow or the admin's app is asleep.
+    (async () => {
+      try {
+        const hydrated = await Booking.findByPk(booking.id, {
+          include: [
+            { model: Service, as: 'service', attributes: ['id', 'name'] },
+            { model: User, as: 'customer', attributes: ['id', 'name', 'mobile'] },
+          ],
+        });
+        const serviceName = hydrated?.service?.name || 'Service';
+        const customerName = hydrated?.customer?.name || 'Customer';
+
+        // 1. Admins
+        const ADMIN_ROLES = [
+          'super_admin', 'operations_manager', 'b2b_admin',
+          'finance_admin', 'customer_support',
+        ];
+        const admins = await User.findAll({
+          where: { role: { [Op.in]: ADMIN_ROLES }, is_active: true },
+          attributes: ['id'],
+        });
+        await Promise.all(
+          admins.map((a) =>
+            sendBookingNotification(a.id, booking.id, 'pending',
+              `📥 New booking — ${serviceName} for ${customerName}. Assign a representative.`,
+            ).catch(() => {})
+          ),
+        );
+
+        // 2. Available reps (active + KYC-verified). They get a heads-up so
+        //    they can be ready when the admin assigns the job.
+        const reps = await User.findAll({
+          where: {
+            role: 'agent',
+            is_active: true,
+            is_kyc_verified: true,
+          },
+          attributes: ['id'],
+          limit: 25,
+        });
+        await Promise.all(
+          reps.map((r) =>
+            sendBookingNotification(r.id, booking.id, 'pending',
+              `📋 New job available — ${serviceName}. Admin will assign shortly.`,
+            ).catch(() => {})
+          ),
+        );
+      } catch (notifyErr) {
+        console.warn('[booking] post-create notify failed:', notifyErr?.message);
+      }
+    })();
   } catch (error) {
     console.error('=== BOOKING CREATION ERROR ===');
     console.error('Error details:', {
