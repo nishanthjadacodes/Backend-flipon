@@ -238,26 +238,37 @@ export const renewCompliance = async (req, res) => {
       });
     }
 
-    // Pick the best matching service (industrial type, name contains the
-    // compliance label words). Fall back to the first industrial service.
+    // Pick the best matching service. Try in order of specificity:
+    //   1. Industrial service whose name contains the compliance label
+    //   2. Any active industrial/both service
+    //   3. Any active service at all (Enquiry.service_id is allowNull:false
+    //      so we MUST end up with something — better a generic match than 500)
     const label = COMPLIANCE_LABELS[doc.compliance_type] || doc.compliance_type;
-    const candidate = await Service.findOne({
-      where: {
-        is_active: true,
-        service_type: { [sequelize.Sequelize.Op.in]: ['industrial', 'both'] },
-        name: { [sequelize.Sequelize.Op.like]: `%${label.split(' ')[0]}%` },
-      },
-    });
-    const fallback = candidate
-      ? null
-      : await Service.findOne({
-          where: {
-            is_active: true,
-            service_type: { [sequelize.Sequelize.Op.in]: ['industrial', 'both'] },
-          },
-        });
+    const service =
+      (await Service.findOne({
+        where: {
+          is_active: true,
+          service_type: { [sequelize.Sequelize.Op.in]: ['industrial', 'both'] },
+          name: { [sequelize.Sequelize.Op.like]: `%${label.split(' ')[0]}%` },
+        },
+      })) ||
+      (await Service.findOne({
+        where: {
+          is_active: true,
+          service_type: { [sequelize.Sequelize.Op.in]: ['industrial', 'both'] },
+        },
+      })) ||
+      (await Service.findOne({ where: { is_active: true } }));
 
-    const service = candidate || fallback;
+    if (!service) {
+      // No services at all in the DB — surface a clear error to the caller
+      // rather than letting Sequelize blow up on the NOT NULL constraint.
+      return res.status(500).json({
+        success: false,
+        message:
+          'No services are configured in the system. An admin needs to add at least one service before renewals can be raised.',
+      });
+    }
 
     // Auto-assign an available representative so they get instantly pinged
     // to call the customer and schedule pickup. Preference order:
@@ -284,17 +295,21 @@ export const renewCompliance = async (req, res) => {
       console.warn('[compliance/renew] auto-assign lookup failed:', e?.message);
     }
 
+    // Enquiry.status enum: pending | quoted | accepted | rejected |
+    //                      in_progress | completed | cancelled
+    // Enquiry.urgency enum: standard | urgent | fast_track
+    // (Anything outside these values throws a Sequelize 500.)
     const enquiry = await Enquiry.create({
-      service_id: service ? service.id : null,
+      service_id: service.id,
       customer_id: req.user.id,
       company_profile_id: profile.id,
       notes:
         `Renewal request for ${label}. Current document expires on ${doc.expiry_date}. ` +
         `Triggered via Compliance Vault → "Renew via FliponeX". ` +
         `Auto-assigned rep: ${autoAssignedRep ? autoAssignedRep.name || autoAssignedRep.id : 'none yet (admin to assign)'}.`,
-      urgency: 'high',
+      urgency: 'urgent',
       preferred_contact_time: null,
-      status: autoAssignedRep ? 'reviewing' : 'new',
+      status: 'pending',
       assigned_admin_id: autoAssignedRep ? autoAssignedRep.id : null,
     });
 
