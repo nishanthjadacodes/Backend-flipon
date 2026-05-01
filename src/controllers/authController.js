@@ -36,6 +36,18 @@ const sendSMS = async (mobile, otp) => {
   }
 };
 
+// OTP delivery provider — explicit env var so we don't rely on NODE_ENV
+// (Render sets NODE_ENV=production by default, which silently disabled
+// the dev banner even on internal/staging deploys).
+//
+//   OTP_PROVIDER=hardcoded  (default) — no SMS, return OTP in response.
+//                                       Free; perfect for internal testing.
+//   OTP_PROVIDER=fast2sms             — real SMS via Fast2SMS, OTP not returned.
+//                                       Requires FAST2SMS_API_KEY.
+//   OTP_PROVIDER=whatsapp             — placeholder for Meta Cloud API.
+const otpProvider = () =>
+  String(process.env.OTP_PROVIDER || 'hardcoded').toLowerCase();
+
 const sendOTP = async (req, res) => {
   try {
     const { mobile } = req.body;
@@ -46,21 +58,30 @@ const sendOTP = async (req, res) => {
     const otp = generateOTP();
     otpStore.set(mobile, { otp, createdAt: Date.now() });
 
-    const smsSent = await sendSMS(mobile, otp);
-    console.log(`[OTP] Mobile: ${mobile}, OTP: ${otp}, SMS sent: ${smsSent}`);
+    const provider = otpProvider();
+    let smsSent = false;
+    if (provider === 'fast2sms') {
+      smsSent = await sendSMS(mobile, otp);
+    }
+    console.log(`[OTP] mobile=${mobile} otp=${otp} provider=${provider} sent=${smsSent}`);
 
-    // In development, when SMS isn't sent, return the OTP in the response
-    // so the app can prefill / show it to the user. Never do this in production.
-    const devMode = process.env.NODE_ENV !== 'production';
+    // The dev banner is gated on whether we sent the OTP via a real
+    // channel. With provider=hardcoded we always return the code so the
+    // app can show / autofill it. With provider=fast2sms we return the
+    // code only as a fallback when the SMS gateway failed (so the rep
+    // isn't locked out by a transient outage), and only on non-prod.
+    const returnOtp =
+      provider === 'hardcoded' ||
+      (!smsSent && process.env.NODE_ENV !== 'production');
 
     res.json({
       success: true,
       message: smsSent
         ? `OTP sent to +91${mobile}`
-        : devMode
-          ? `Dev mode OTP (SMS gateway not configured): ${otp}`
+        : returnOtp
+          ? `Dev OTP (provider=${provider}): ${otp}`
           : 'OTP sent successfully',
-      ...(devMode && !smsSent ? { devOtp: otp } : {}),
+      ...(returnOtp ? { devOtp: otp, otp } : {}),
     });
   } catch (error) {
     console.error('Error sending OTP:', error);
