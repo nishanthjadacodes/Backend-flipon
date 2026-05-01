@@ -91,7 +91,11 @@ const sendOTP = async (req, res) => {
 
 const verifyOTP = async (req, res) => {
   try {
-    const { mobile, otp, role = 'agent' } = req.body;
+    // Default to 'customer' — much safer than 'agent' as the global
+    // fallback. Reps go through their own app surface which always
+    // passes role='agent' explicitly. A request without a role from any
+    // unknown surface most likely belongs to a customer.
+    const { mobile, otp, role = 'customer' } = req.body;
 
     if (!mobile || !otp) {
       return res.status(400).json({ success: false, message: 'Mobile number and OTP are required' });
