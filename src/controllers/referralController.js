@@ -1,4 +1,4 @@
-import { User, Referral, Booking } from '../models/index.js';
+import { User, Referral, Booking, WalletTransaction } from '../models/index.js';
 import { Op } from 'sequelize';
 
 // Generate or get referral code for the logged-in agent
@@ -51,11 +51,39 @@ const getReferralData = async (req, res) => {
       .reduce((sum, r) => sum + parseFloat(r.reward_amount || 0), 0);
     const availableCredits = totalEarned;
 
-    // Milestones per policy: Bronze 5, Silver 10, Gold 25
+    // Milestones per policy: Bronze 5, Silver 10, Gold 25.
+    // `achieved` = threshold crossed (display flag).
+    // `received` = bonus actually credited to wallet (truth from
+    // wallet_transactions). The two can disagree briefly between the
+    // referral being marked complete and the wallet credit committing,
+    // or for legacy referrers who hit the threshold before this fix shipped.
+    const milestoneCredits = await WalletTransaction.findAll({
+      where: { user_id: req.user.id, source: 'referral_milestone' },
+      attributes: ['amount'],
+    });
+    const creditedBonusSet = new Set(
+      milestoneCredits.map((t) => Number(t.amount)),
+    );
     const milestones = {
-      bronze: { required: 5, achieved: successfulReferrals >= 5, bonus: 50, received: successfulReferrals >= 5 },
-      silver: { required: 10, achieved: successfulReferrals >= 10, bonus: 150, received: successfulReferrals >= 10 },
-      gold: { required: 25, achieved: successfulReferrals >= 25, bonus: 500, received: successfulReferrals >= 25, status: 'Priority User' },
+      bronze: {
+        required: 5,
+        achieved: successfulReferrals >= 5,
+        bonus: 50,
+        received: creditedBonusSet.has(50),
+      },
+      silver: {
+        required: 10,
+        achieved: successfulReferrals >= 10,
+        bonus: 150,
+        received: creditedBonusSet.has(150),
+      },
+      gold: {
+        required: 25,
+        achieved: successfulReferrals >= 25,
+        bonus: 500,
+        received: creditedBonusSet.has(500),
+        status: 'Priority User',
+      },
     };
 
     // Royalty: 2% of downline agents' completed booking values this month

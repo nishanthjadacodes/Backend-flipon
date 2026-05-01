@@ -11,9 +11,21 @@ import {
 } from '../services/notificationService.js';
 import { creditWallet } from './walletController.js';
 
-// Spec: when User B (referee) completes their first paid service, credit the
-// referrer ₹50 and mark the Referral row as 'completed'. Idempotent — only
-// triggers if the referral is still 'pending'.
+// Refer & Earn policy enforcement — fires when a referee completes their
+// first paid service. Idempotent: only triggers once per Referral.
+//
+// Per the policy:
+//   1. Referrer gets ₹20 credits (not ₹50 — earlier code was wrong).
+//   2. Booking value must be ≥ ₹99 for the reward to count.
+//   3. After crediting, check if referrer has hit a milestone tier
+//      (5/10/25 successful referrals) and credit the bonus + flag
+//      Priority User on Gold.
+const MILESTONE_TIERS = [
+  { count: 5,  bonus: 50,  label: 'Bronze Super Referrer',  status: null },
+  { count: 10, bonus: 150, label: 'Silver Super Referrer',  status: null },
+  { count: 25, bonus: 500, label: 'Gold Star Super Referrer', status: 'priority_user' },
+];
+
 const triggerReferralRewardIfFirstBooking = async (customerId, bookingId) => {
   try {
     const referral = await Referral.findOne({
@@ -28,22 +40,69 @@ const triggerReferralRewardIfFirstBooking = async (customerId, bookingId) => {
     });
     if (completedCount > 1) return;
 
+    // Policy: minimum booking value ₹99 for the reward to count. We fetch
+    // the booking's price (NOT the service base cost — admin may have
+    // quoted a different amount for B2B). A sub-₹99 booking still flips
+    // the referral to 'completed' so the user doesn't keep racking up
+    // pending referrals indefinitely, but no money changes hands.
+    const booking = await Booking.findByPk(bookingId, { attributes: ['price_quoted'] });
+    const bookingValue = parseFloat(booking?.price_quoted || 0);
+    const meetsMinimum = bookingValue >= 99;
+
     const now = new Date();
     await referral.update({
       status: 'completed',
       first_service_completed_at: now,
-      credited_at: now,
+      credited_at: meetsMinimum ? now : null,
     });
 
-    // Spec: ₹50 to referrer's wallet (referrer reward), ₹20 discount already
-    // captured on the referee's first booking via referee_discount.
+    if (!meetsMinimum) {
+      console.log(
+        `[referral] booking ${bookingId} value ₹${bookingValue} < ₹99 — referral marked complete but no reward credited`,
+      );
+      return;
+    }
+
+    // Step 1: ₹20 to the referrer's wallet (per policy section 1.1).
     await creditWallet({
       userId: referral.referrer_id,
-      amount: 50,
+      amount: 20,
       source: 'referral_reward',
       description: 'Friend completed first service',
       bookingId,
     });
+
+    // Step 2: Milestone bonuses. Count successful referrals AFTER the
+    // current one was just marked complete. If the referrer has now hit
+    // exactly 5 / 10 / 25, credit the corresponding bonus.
+    const successfulCount = await Referral.count({
+      where: { referrer_id: referral.referrer_id, status: 'completed' },
+    });
+    const tier = MILESTONE_TIERS.find((t) => t.count === successfulCount);
+    if (tier) {
+      await creditWallet({
+        userId: referral.referrer_id,
+        amount: tier.bonus,
+        source: 'referral_milestone',
+        description: `${tier.label} achieved — ${tier.count} successful referrals`,
+        bookingId,
+      });
+      // Gold tier additionally flips the User's priority flag so the rep
+      // app + admin assignment list can surface the badge / preference.
+      if (tier.status === 'priority_user') {
+        try {
+          await User.update(
+            { is_priority_user: true },
+            { where: { id: referral.referrer_id } },
+          );
+        } catch (priErr) {
+          console.error('[referral] failed to set priority_user flag:', priErr?.message);
+        }
+      }
+      console.log(
+        `[referral] milestone ${tier.label} — credited ₹${tier.bonus} to user ${referral.referrer_id}`,
+      );
+    }
   } catch (e) {
     // Don't break the completion flow if reward credit fails.
     console.error('Referral reward trigger failed:', e);
@@ -170,6 +229,40 @@ const createBooking = async (req, res) => {
       console.error('[booking] could not compute next booking_number:', e?.message);
     }
 
+    // Refer & Earn — ₹20 referee discount on the customer's FIRST booking
+    // when they signed up with a referral code. We deduct it from the
+    // service price and store the discount amount on the booking row so
+    // the receipt can show "Service ₹X, Referral discount −₹20, Net ₹Y".
+    // The discount only applies if there's a pending Referral row AND
+    // this is the customer's first booking.
+    const baseUserCost = parseFloat(service.user_cost || 0);
+    let priceQuoted = baseUserCost;
+    let referralDiscount = 0;
+    try {
+      const pendingReferral = await Referral.findOne({
+        where: { referee_id: req.user.id, status: 'pending' },
+      });
+      if (pendingReferral) {
+        const existingBookingCount = await Booking.count({
+          where: { customer_id: req.user.id },
+        });
+        if (existingBookingCount === 0) {
+          // Cap the discount at the booking value so we never end up with
+          // a negative price (e.g. service costs ₹15 — discount drops to ₹15).
+          referralDiscount = Math.min(
+            parseFloat(pendingReferral.referee_discount || 20),
+            baseUserCost,
+          );
+          priceQuoted = Math.max(0, baseUserCost - referralDiscount);
+          console.log(
+            `[referral] applied ₹${referralDiscount} discount on first booking for referee ${req.user.id}`,
+          );
+        }
+      }
+    } catch (refErr) {
+      console.error('[referral] discount lookup failed (proceeding at full price):', refErr?.message);
+    }
+
     const booking = await Booking.create({
       customer_id: req.user.id,
       service_id: finalServiceId,
@@ -185,7 +278,8 @@ const createBooking = async (req, res) => {
       industrial_service_details,
       documents_required: service.required_documents,
       dynamic_fields: req.body.dynamic_fields || null,
-      price_quoted: service.user_cost,
+      price_quoted: priceQuoted,
+      referral_discount: referralDiscount,
       notes,
       priority,
       booking_number: bookingNumber,

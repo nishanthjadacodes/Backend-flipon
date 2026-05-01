@@ -110,6 +110,14 @@ const User = sequelize.define('User', {
     defaultValue: 0,
     allowNull: false
   },
+  // Earned via the Gold Star milestone (25 successful referrals). Drives
+  // priority queue placement when admins assign reps and surfaces a badge
+  // in the rep app's Profile + Referral screens.
+  is_priority_user: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    allowNull: false
+  },
   created_at: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW

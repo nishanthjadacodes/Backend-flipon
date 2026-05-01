@@ -31,6 +31,7 @@ import b2bReportsRoutes from './src/routes/b2bReportsRoutes.js';
 import walletRoutes from './src/routes/walletRoutes.js';
 import complianceRoutes from './src/routes/complianceRoutes.js';
 import { startComplianceAlertScheduler } from './src/jobs/complianceAlerts.js';
+import { startReferralExpiryScheduler } from './src/jobs/referralExpiry.js';
 
 const app = express();
 
@@ -167,6 +168,10 @@ app.use('/api/compliance', complianceRoutes);
 // Smart Alert system — daily-ish scan that pushes 90/60/30-day expiry
 // notifications for industrial customers' compliance documents.
 startComplianceAlertScheduler();
+
+// Refer & Earn — hourly sweep that flips pending Referral rows to 'expired'
+// once their 90-day window passes.
+startReferralExpiryScheduler();
 
 // Health check endpoint
 app.get('/health', (req, res) => {

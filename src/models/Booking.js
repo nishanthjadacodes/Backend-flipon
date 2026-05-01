@@ -136,6 +136,14 @@ const Booking = sequelize.define('Booking', {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: true
   },
+  // Referral discount applied at booking creation (₹20 for first-time
+  // referees). Surfaced on the receipt + customer ledger so the price
+  // breakdown is auditable. NULL when no referral code was used.
+  referral_discount: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+    defaultValue: 0,
+  },
   payment_status: {
     type: DataTypes.ENUM('pending', 'paid', 'refunded'),
     defaultValue: 'pending'
