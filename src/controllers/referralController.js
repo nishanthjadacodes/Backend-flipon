@@ -108,6 +108,13 @@ const getReferralData = async (req, res) => {
     // achieves a minimum monthly business volume of ₹5,000").
     const PER_DOWNLINE_MIN = 5000;
 
+    // Per-downline rating floor (per policy 4.1 Quality Assurance).
+    // A downline whose monthly avg rating drops below this is suspended
+    // from the royalty basis for that month. NULL ratings (no completed
+    // jobs with feedback) are treated as eligible — the agent hasn't
+    // "fallen below" anything yet.
+    const RATING_FLOOR = 3.5;
+
     if (downlineAgentIds.length > 0) {
       const [thisMonthBookings, lastMonthBookings] = await Promise.all([
         Booking.findAll({
@@ -116,7 +123,7 @@ const getReferralData = async (req, res) => {
             status: 'completed',
             completed_at: { [Op.gte]: monthStart },
           },
-          attributes: ['agent_id', 'price_quoted'],
+          attributes: ['agent_id', 'price_quoted', 'customer_rating'],
         }),
         Booking.findAll({
           where: {
@@ -124,32 +131,44 @@ const getReferralData = async (req, res) => {
             status: 'completed',
             completed_at: { [Op.gte]: lastMonthStart, [Op.lt]: lastMonthEnd },
           },
-          attributes: ['agent_id', 'price_quoted'],
+          attributes: ['agent_id', 'price_quoted', 'customer_rating'],
         }),
       ]);
 
-      // Group bookings by downline agent so we can apply the ₹5k
-      // per-agent threshold before summing up the qualifying total.
-      const sumByAgent = (rows) => {
-        const m = new Map();
+      // For each downline, compute (totalBusiness, avgRating). Then apply
+      // BOTH gates: business >= ₹5k AND avg rating >= 3.5 (or no ratings).
+      const aggregateByAgent = (rows) => {
+        const map = new Map();
         for (const b of rows) {
-          const v = parseFloat(b.price_quoted || 0);
-          m.set(b.agent_id, (m.get(b.agent_id) || 0) + v);
+          const a = b.agent_id;
+          if (!map.has(a)) map.set(a, { biz: 0, ratingSum: 0, ratingCount: 0 });
+          const e = map.get(a);
+          e.biz += parseFloat(b.price_quoted || 0);
+          if (b.customer_rating != null) {
+            e.ratingSum += Number(b.customer_rating);
+            e.ratingCount += 1;
+          }
         }
-        return m;
+        return map;
       };
-      const qualifying = (m) =>
-        Array.from(m.values())
-          .filter((v) => v >= PER_DOWNLINE_MIN)
-          .reduce((s, v) => s + v, 0);
+      const qualifyingTotal = (m) => {
+        let total = 0;
+        for (const e of m.values()) {
+          if (e.biz < PER_DOWNLINE_MIN) continue;
+          const avg = e.ratingCount > 0 ? e.ratingSum / e.ratingCount : null;
+          if (avg !== null && avg < RATING_FLOOR) continue;   // suspended
+          total += e.biz;
+        }
+        return total;
+      };
 
-      const thisMonthByAgent = sumByAgent(thisMonthBookings);
-      const lastMonthByAgent = sumByAgent(lastMonthBookings);
+      const thisMonthByAgent = aggregateByAgent(thisMonthBookings);
+      const lastMonthByAgent = aggregateByAgent(lastMonthBookings);
 
       totalTeamBusiness = thisMonthBookings.reduce((s, b) => s + parseFloat(b.price_quoted || 0), 0);
-      qualifyingTeamBusiness = qualifying(thisMonthByAgent);
+      qualifyingTeamBusiness = qualifyingTotal(thisMonthByAgent);
       lastMonthTeamBusiness = lastMonthBookings.reduce((s, b) => s + parseFloat(b.price_quoted || 0), 0);
-      lastMonthQualifyingBusiness = qualifying(lastMonthByAgent);
+      lastMonthQualifyingBusiness = qualifyingTotal(lastMonthByAgent);
       activeMentees = new Set(thisMonthBookings.map(b => b.agent_id)).size;
     }
 

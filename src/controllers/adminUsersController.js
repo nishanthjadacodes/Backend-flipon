@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { Op } from 'sequelize';
-import { User, AuditLog } from '../models/index.js';
+import { User, AuditLog, Referral } from '../models/index.js';
 import { ADMIN_ROLE_NAMES } from '../constants/permissions.js';
 
 const safeUser = (u) => ({
@@ -101,5 +101,116 @@ export const deactivateAdmin = async (req, res) => {
   } catch (err) {
     console.error('deactivateAdmin error:', err);
     res.status(500).json({ success: false, message: 'Failed to deactivate admin' });
+  }
+};
+
+// End of the calendar quarter `now` falls in (used by the anti-poaching
+// forfeit window — quarter is Jan-Mar / Apr-Jun / Jul-Sep / Oct-Dec).
+const endOfQuarter = (now = new Date()) => {
+  const q = Math.floor(now.getMonth() / 3);     // 0..3
+  const monthAfterQuarter = (q + 1) * 3;        // 3, 6, 9, 12
+  return new Date(now.getFullYear(), monthAfterQuarter, 1, 0, 0, 0, 0);
+};
+
+// POST /admin/users/:id/forfeit-royalty
+// Per policy 4.2 — admin flags an anti-poaching violation; royalty for
+// the rest of the current quarter is forfeited. Reason is mandatory so
+// the audit trail captures the rationale.
+export const forfeitRoyaltyForQuarter = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+    if (!reason || !String(reason).trim()) {
+      return res.status(400).json({ success: false, message: 'Reason required (anti-poaching evidence).' });
+    }
+    const user = await User.findByPk(id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const until = endOfQuarter(new Date());
+    await user.update({
+      royalty_forfeited_until: until,
+      royalty_forfeit_reason: String(reason).substring(0, 250),
+    });
+    await AuditLog.record({
+      actor: req.user,
+      action: 'royalty.forfeit',
+      resource_type: 'user',
+      resource_id: id,
+      metadata: { until: until.toISOString(), reason },
+    });
+    res.json({
+      success: true,
+      message: `Royalty forfeited until ${until.toISOString().substring(0, 10)}`,
+      data: { royalty_forfeited_until: until, royalty_forfeit_reason: reason },
+    });
+  } catch (err) {
+    console.error('forfeitRoyaltyForQuarter error:', err);
+    res.status(500).json({ success: false, message: 'Failed to forfeit royalty' });
+  }
+};
+
+// POST /admin/users/:id/clear-royalty-forfeit
+// Reverses a forfeit (e.g. dispute resolved in agent's favour).
+export const clearRoyaltyForfeit = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = await User.findByPk(id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    await user.update({ royalty_forfeited_until: null, royalty_forfeit_reason: null });
+    await AuditLog.record({
+      actor: req.user,
+      action: 'royalty.forfeit_cleared',
+      resource_type: 'user',
+      resource_id: id,
+    });
+    res.json({ success: true, message: 'Royalty forfeit cleared' });
+  } catch (err) {
+    console.error('clearRoyaltyForfeit error:', err);
+    res.status(500).json({ success: false, message: 'Failed to clear forfeit' });
+  }
+};
+
+// POST /admin/users/:id/terminate-self-referral
+// Per policy 4.3 — confirmed self-referral via duplicate accounts results
+// in immediate account termination. We deactivate the user, expire any
+// outstanding referrals they own, and forfeit any pending royalty.
+export const terminateForSelfReferral = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+    const user = await User.findByPk(id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    // Hard deactivate the offender's account.
+    await user.update({
+      is_active: false,
+      royalty_forfeited_until: new Date('2099-12-31'),
+      royalty_forfeit_reason: `Self-referral violation: ${String(reason || 'admin-confirmed').substring(0, 220)}`,
+    });
+
+    // Expire any pending referrals they originated AND any pending
+    // referrals where they are the referee — neither side should pay out
+    // when the relationship was fraudulent.
+    await Referral.update(
+      { status: 'expired' },
+      {
+        where: {
+          status: 'pending',
+          [Op.or]: [{ referrer_id: id }, { referee_id: id }],
+        },
+      },
+    );
+
+    await AuditLog.record({
+      actor: req.user,
+      action: 'user.terminate.self_referral',
+      resource_type: 'user',
+      resource_id: id,
+      metadata: { reason: reason || null },
+    });
+    res.json({ success: true, message: 'Account terminated; pending referrals expired.' });
+  } catch (err) {
+    console.error('terminateForSelfReferral error:', err);
+    res.status(500).json({ success: false, message: 'Failed to terminate account' });
   }
 };

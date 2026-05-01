@@ -22,6 +22,7 @@ import { creditWallet } from '../controllers/walletController.js';
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const PER_DOWNLINE_MIN = 5000;       // ₹5k per-downline floor
 const PERSONAL_TASK_MIN = 5;         // 5 personal tasks/month minimum
+const RATING_FLOOR = 3.5;            // per-downline quality floor
 const ROYALTY_RATE = 0.02;           // 2%
 
 const formatPeriod = (d) => {
@@ -38,7 +39,10 @@ const previousMonthRange = (now) => {
 };
 
 // Compute the qualifying team business for one referrer in the given window.
-// Returns { qualifyingTotal, perAgentSums, downlineIds }.
+// Applies BOTH gates per policy:
+//   - per-downline business >= ₹5,000 (section 2)
+//   - per-downline avg rating >= 3.5 stars, or no ratings yet (section 4.1)
+// Returns { qualifyingTotal, perAgentDetail, downlineIds }.
 const computeQualifyingBusiness = async (referrerId, start, end) => {
   const refs = await Referral.findAll({
     where: { referrer_id: referrerId, status: 'completed' },
@@ -46,7 +50,7 @@ const computeQualifyingBusiness = async (referrerId, start, end) => {
   });
   const downlineIds = refs.map((r) => r.referee_id).filter(Boolean);
   if (downlineIds.length === 0) {
-    return { qualifyingTotal: 0, perAgentSums: new Map(), downlineIds: [] };
+    return { qualifyingTotal: 0, perAgentDetail: new Map(), downlineIds: [] };
   }
 
   const bookings = await Booking.findAll({
@@ -55,19 +59,32 @@ const computeQualifyingBusiness = async (referrerId, start, end) => {
       status: 'completed',
       completed_at: { [Op.gte]: start, [Op.lt]: end },
     },
-    attributes: ['agent_id', 'price_quoted'],
+    attributes: ['agent_id', 'price_quoted', 'customer_rating'],
   });
 
-  const perAgentSums = new Map();
+  const perAgentDetail = new Map();
   for (const b of bookings) {
-    const v = parseFloat(b.price_quoted || 0);
-    perAgentSums.set(b.agent_id, (perAgentSums.get(b.agent_id) || 0) + v);
+    const a = b.agent_id;
+    if (!perAgentDetail.has(a)) {
+      perAgentDetail.set(a, { biz: 0, ratingSum: 0, ratingCount: 0 });
+    }
+    const e = perAgentDetail.get(a);
+    e.biz += parseFloat(b.price_quoted || 0);
+    if (b.customer_rating != null) {
+      e.ratingSum += Number(b.customer_rating);
+      e.ratingCount += 1;
+    }
   }
-  const qualifyingTotal = Array.from(perAgentSums.values())
-    .filter((v) => v >= PER_DOWNLINE_MIN)
-    .reduce((s, v) => s + v, 0);
 
-  return { qualifyingTotal, perAgentSums, downlineIds };
+  let qualifyingTotal = 0;
+  for (const e of perAgentDetail.values()) {
+    if (e.biz < PER_DOWNLINE_MIN) continue;
+    const avg = e.ratingCount > 0 ? e.ratingSum / e.ratingCount : null;
+    if (avg !== null && avg < RATING_FLOOR) continue;
+    qualifyingTotal += e.biz;
+  }
+
+  return { qualifyingTotal, perAgentDetail, downlineIds };
 };
 
 const personalTaskCount = async (agentId, start, end) =>
@@ -89,8 +106,43 @@ const processReferrer = async (user, period, start, end) => {
     return { credited: false, reason: 'already_processed' };
   }
 
+  // Anti-poaching forfeit window (policy 4.2). If admin has set
+  // royalty_forfeited_until and we're still inside that window, skip
+  // the payout entirely and write a 'rejected' Royalty row so finance
+  // can audit the forfeiture.
+  const now = new Date();
+  const forfeitedUntil = user.royalty_forfeited_until
+    ? new Date(user.royalty_forfeited_until)
+    : null;
+  if (forfeitedUntil && now < forfeitedUntil) {
+    await Royalty.create({
+      period,
+      category: 'royalty',
+      beneficiary_type: 'agent',
+      beneficiary_id: user.id,
+      beneficiary_name: user.name || `Agent ${String(user.id).substring(0, 8)}`,
+      basis_revenue: 0,
+      percentage: ROYALTY_RATE * 100,
+      amount: 0,
+      status: 'rejected',
+      notes: `Anti-poaching forfeit until ${forfeitedUntil.toISOString().substring(0, 10)}: ${user.royalty_forfeit_reason || 'admin-flagged'}`,
+      paid_at: null,
+    });
+    return { credited: false, amount: 0, reason: 'forfeited' };
+  }
+
   const personalTasks = await personalTaskCount(user.id, start, end);
-  const { qualifyingTotal, perAgentSums } = await computeQualifyingBusiness(user.id, start, end);
+  const { qualifyingTotal, perAgentDetail } = await computeQualifyingBusiness(user.id, start, end);
+
+  const totalDownlines = perAgentDetail.size;
+  const businessQualifying = [...perAgentDetail.values()].filter(
+    (e) => e.biz >= PER_DOWNLINE_MIN,
+  ).length;
+  const ratingSuspended = [...perAgentDetail.values()].filter((e) => {
+    if (e.biz < PER_DOWNLINE_MIN) return false;
+    const avg = e.ratingCount > 0 ? e.ratingSum / e.ratingCount : null;
+    return avg !== null && avg < RATING_FLOOR;
+  }).length;
 
   const eligible = personalTasks >= PERSONAL_TASK_MIN && qualifyingTotal > 0;
   const amount = eligible ? Math.round(qualifyingTotal * ROYALTY_RATE) : 0;
@@ -122,8 +174,8 @@ const processReferrer = async (user, period, start, end) => {
         amount,
         status: amount > 0 ? 'paid' : 'rejected',
         notes: eligible
-          ? `Auto-paid: ${perAgentSums.size} downline(s), ${[...perAgentSums.values()].filter((v) => v >= PER_DOWNLINE_MIN).length} qualifying.`
-          : `Skipped: personalTasks=${personalTasks} (need ${PERSONAL_TASK_MIN}), qualifying=₹${qualifyingTotal}`,
+          ? `Auto-paid: ${totalDownlines} downline(s), ${businessQualifying} cleared ₹${PER_DOWNLINE_MIN}, ${ratingSuspended} suspended for rating <3.5★.`
+          : `Skipped: personalTasks=${personalTasks} (need ${PERSONAL_TASK_MIN}), qualifying=₹${qualifyingTotal}, ratingSuspended=${ratingSuspended}`,
         paid_at: amount > 0 ? new Date() : null,
       },
       { transaction: t },
@@ -161,7 +213,7 @@ const runOnce = async () => {
 
     const users = await User.findAll({
       where: { id: { [Op.in]: ids } },
-      attributes: ['id', 'name'],
+      attributes: ['id', 'name', 'royalty_forfeited_until', 'royalty_forfeit_reason'],
     });
 
     let paidCount = 0;

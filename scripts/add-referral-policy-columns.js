@@ -18,6 +18,16 @@ const STATEMENTS = [
       'ALTER TABLE users ADD COLUMN is_priority_user TINYINT(1) NOT NULL DEFAULT 0',
   },
   {
+    table: 'users',
+    label: 'royalty_forfeited_until',
+    sql: 'ALTER TABLE users ADD COLUMN royalty_forfeited_until DATETIME NULL',
+  },
+  {
+    table: 'users',
+    label: 'royalty_forfeit_reason',
+    sql: 'ALTER TABLE users ADD COLUMN royalty_forfeit_reason VARCHAR(255) NULL',
+  },
+  {
     table: 'bookings',
     label: 'referral_discount',
     sql:

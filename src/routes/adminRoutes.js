@@ -38,6 +38,7 @@ import { b2bPipeline, updateMilestone } from '../controllers/b2bController.js';
 import { listAllEnquiriesForAdmin, issueQuoteAdmin, rejectEnquiryAdmin } from '../controllers/enquiryController.js';
 import {
   listAdmins, createAdmin, updateAdmin, deactivateAdmin,
+  forfeitRoyaltyForQuarter, clearRoyaltyForfeit, terminateForSelfReferral,
 } from '../controllers/adminUsersController.js';
 import { bulkUploadMiddleware, bulkAgents, bulkServices } from '../controllers/bulkUploadController.js';
 import auth from '../middleware/auth.js';
@@ -71,6 +72,13 @@ router.delete('/services/:id', requirePermission(PERMISSIONS.SERVICE_DELETE), de
 // User management (customers + agents)
 router.get('/users', requirePermission(PERMISSIONS.USER_VIEW), getAllUsers);
 router.put('/users/:id/status', requirePermission(PERMISSIONS.USER_EDIT), updateUserStatus);
+
+// Refer & Earn governance — anti-poaching forfeit + self-referral termination.
+// Royalty-approve permission is the right gate: only finance/super-admin
+// should be able to take money away from a rep's wallet path.
+router.post('/users/:id/forfeit-royalty', requirePermission(PERMISSIONS.ROYALTY_APPROVE), forfeitRoyaltyForQuarter);
+router.post('/users/:id/clear-royalty-forfeit', requirePermission(PERMISSIONS.ROYALTY_APPROVE), clearRoyaltyForfeit);
+router.post('/users/:id/terminate-self-referral', requirePermission(PERMISSIONS.USER_DEACTIVATE), terminateForSelfReferral);
 
 // Admin user CRUD (Super Admin only)
 router.get('/admins', requirePermission(PERMISSIONS.USER_VIEW), listAdmins);

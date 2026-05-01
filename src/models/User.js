@@ -118,6 +118,19 @@ const User = sequelize.define('User', {
     defaultValue: false,
     allowNull: false
   },
+  // Anti-poaching forfeit window. Per the Agent Referral & Royalty Policy:
+  // "Any agent found violating [the anti-poaching rule] will forfeit their
+  // royalty earnings for that quarter." Admin sets this to the end-of-quarter
+  // date when a violation is confirmed; the royalty payout job skips
+  // referrers whose `now < royalty_forfeited_until`.
+  royalty_forfeited_until: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+  royalty_forfeit_reason: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+  },
   created_at: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW
