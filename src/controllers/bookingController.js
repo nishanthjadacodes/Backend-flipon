@@ -26,85 +26,122 @@ const MILESTONE_TIERS = [
   { count: 25, bonus: 500, label: 'Gold Star Super Referrer', status: 'priority_user' },
 ];
 
-const triggerReferralRewardIfFirstBooking = async (customerId, bookingId) => {
-  try {
-    const referral = await Referral.findOne({
-      where: { referee_id: customerId, status: 'pending' },
-    });
-    if (!referral) return;
+// Internal — credits reward + milestone for one specific Referral row.
+// Caller decides whether the referee is a customer or an agent based on
+// what kind of booking just completed; this function only cares that we
+// just confirmed the referee's first paid service.
+const creditReferralReward = async ({ referral, bookingId, bookingValue, refereeRole }) => {
+  const meetsMinimum = bookingValue >= 99;
+  const now = new Date();
+  await referral.update({
+    status: 'completed',
+    first_service_completed_at: now,
+    credited_at: meetsMinimum ? now : null,
+  });
 
-    // Confirm this is the customer's first completed booking — guards against
-    // the trigger firing on later completions if status was rolled back.
-    const completedCount = await Booking.count({
-      where: { customer_id: customerId, status: 'completed' },
-    });
-    if (completedCount > 1) return;
+  if (!meetsMinimum) {
+    console.log(
+      `[referral] booking ${bookingId} value ₹${bookingValue} < ₹99 — referral marked complete but no reward credited`,
+    );
+    return;
+  }
 
-    // Policy: minimum booking value ₹99 for the reward to count. We fetch
-    // the booking's price (NOT the service base cost — admin may have
-    // quoted a different amount for B2B). A sub-₹99 booking still flips
-    // the referral to 'completed' so the user doesn't keep racking up
-    // pending referrals indefinitely, but no money changes hands.
-    const booking = await Booking.findByPk(bookingId, { attributes: ['price_quoted'] });
-    const bookingValue = parseFloat(booking?.price_quoted || 0);
-    const meetsMinimum = bookingValue >= 99;
+  await creditWallet({
+    userId: referral.referrer_id,
+    amount: 20,
+    source: 'referral_reward',
+    description:
+      refereeRole === 'agent'
+        ? 'Downline rep completed first task'
+        : 'Friend completed first service',
+    bookingId,
+  });
 
-    const now = new Date();
-    await referral.update({
-      status: 'completed',
-      first_service_completed_at: now,
-      credited_at: meetsMinimum ? now : null,
-    });
-
-    if (!meetsMinimum) {
-      console.log(
-        `[referral] booking ${bookingId} value ₹${bookingValue} < ₹99 — referral marked complete but no reward credited`,
-      );
-      return;
-    }
-
-    // Step 1: ₹20 to the referrer's wallet (per policy section 1.1).
+  const successfulCount = await Referral.count({
+    where: { referrer_id: referral.referrer_id, status: 'completed' },
+  });
+  const tier = MILESTONE_TIERS.find((t) => t.count === successfulCount);
+  if (tier) {
     await creditWallet({
       userId: referral.referrer_id,
-      amount: 20,
-      source: 'referral_reward',
-      description: 'Friend completed first service',
+      amount: tier.bonus,
+      source: 'referral_milestone',
+      description: `${tier.label} achieved — ${tier.count} successful referrals`,
       bookingId,
     });
+    if (tier.status === 'priority_user') {
+      try {
+        await User.update(
+          { is_priority_user: true },
+          { where: { id: referral.referrer_id } },
+        );
+      } catch (priErr) {
+        console.error('[referral] failed to set priority_user flag:', priErr?.message);
+      }
+    }
+    console.log(
+      `[referral] milestone ${tier.label} — credited ₹${tier.bonus} to user ${referral.referrer_id}`,
+    );
+  }
+};
 
-    // Step 2: Milestone bonuses. Count successful referrals AFTER the
-    // current one was just marked complete. If the referrer has now hit
-    // exactly 5 / 10 / 25, credit the corresponding bonus.
-    const successfulCount = await Referral.count({
-      where: { referrer_id: referral.referrer_id, status: 'completed' },
-    });
-    const tier = MILESTONE_TIERS.find((t) => t.count === successfulCount);
-    if (tier) {
-      await creditWallet({
-        userId: referral.referrer_id,
-        amount: tier.bonus,
-        source: 'referral_milestone',
-        description: `${tier.label} achieved — ${tier.count} successful referrals`,
-        bookingId,
+// Fires when a booking transitions to 'completed'. Handles BOTH directions
+// of the Refer & Earn policy:
+//
+//   1. Customer-to-customer: someone signs up using a customer's referral
+//      code and completes their first paid booking → original referrer
+//      gets ₹20 (matched on Referral.referee_id = booking.customer_id).
+//
+//   2. Agent-to-agent: a rep referred via another rep's code completes
+//      their first task as the agent → original referrer gets ₹20
+//      (matched on Referral.referee_id = booking.agent_id).
+//
+// The earlier version only handled #1, which is why agent-to-agent
+// rewards never landed — the trigger looked at the wrong user_id field.
+const triggerReferralRewardIfFirstBooking = async (booking) => {
+  try {
+    const bookingValue = parseFloat(booking.price_quoted || 0);
+
+    // Direction 1 — customer-side first service.
+    if (booking.customer_id) {
+      const customerReferral = await Referral.findOne({
+        where: { referee_id: booking.customer_id, status: 'pending' },
       });
-      // Gold tier additionally flips the User's priority flag so the rep
-      // app + admin assignment list can surface the badge / preference.
-      if (tier.status === 'priority_user') {
-        try {
-          await User.update(
-            { is_priority_user: true },
-            { where: { id: referral.referrer_id } },
-          );
-        } catch (priErr) {
-          console.error('[referral] failed to set priority_user flag:', priErr?.message);
+      if (customerReferral) {
+        const completedAsCustomer = await Booking.count({
+          where: { customer_id: booking.customer_id, status: 'completed' },
+        });
+        if (completedAsCustomer <= 1) {
+          await creditReferralReward({
+            referral: customerReferral,
+            bookingId: booking.id,
+            bookingValue,
+            refereeRole: 'customer',
+          });
         }
       }
-      console.log(
-        `[referral] milestone ${tier.label} — credited ₹${tier.bonus} to user ${referral.referrer_id}`,
-      );
+    }
+
+    // Direction 2 — agent-side first task.
+    if (booking.agent_id) {
+      const agentReferral = await Referral.findOne({
+        where: { referee_id: booking.agent_id, status: 'pending' },
+      });
+      if (agentReferral) {
+        const completedAsAgent = await Booking.count({
+          where: { agent_id: booking.agent_id, status: 'completed' },
+        });
+        if (completedAsAgent <= 1) {
+          await creditReferralReward({
+            referral: agentReferral,
+            bookingId: booking.id,
+            bookingValue,
+            refereeRole: 'agent',
+          });
+        }
+      }
     }
   } catch (e) {
-    // Don't break the completion flow if reward credit fails.
     console.error('Referral reward trigger failed:', e);
   }
 };
@@ -873,9 +910,12 @@ const verifyCompletionOTP = async (req, res) => {
       }
     }
 
-    // Spec H: trigger double-sided referral reward on first completed booking.
-    // Runs async so a wallet/credit hiccup doesn't break the OTP response.
-    triggerReferralRewardIfFirstBooking(booking.customer_id, id);
+    // Spec H: trigger double-sided referral reward on first completed
+    // booking. Handles BOTH the customer-side ("friend completed first
+    // service") AND agent-side ("downline rep completed first task")
+    // referral chains. Runs async so a wallet hiccup doesn't break the
+    // OTP response.
+    triggerReferralRewardIfFirstBooking(booking);
 
     res.json({
       success: true,
