@@ -9,6 +9,7 @@ import { Server } from 'socket.io';
 import http from 'http';
 
 import { sequelize } from './src/config/database.js';
+import { runBootMigrations } from './src/utils/bootMigrations.js';
 import { syncModels, AdminRole } from './src/models/index.js';
 import { ROLE_PERMISSIONS } from './src/constants/permissions.js';
 import { initializeSocket } from './src/config/socket.js';
@@ -229,6 +230,14 @@ const startServer = async () => {
   try {
     await sequelize.authenticate();
     console.log('Database connection established successfully.');
+
+    // Idempotent additive ALTERs — runs before syncModels() so any new
+    // columns referenced by the loaded models exist on disk before the
+    // first SELECT. Prevents the "Unknown column" cascade that broke
+    // both customer my-bookings and rep tasks endpoints when a deploy
+    // shipped before the matching migration script was run manually.
+    await runBootMigrations();
+
     await syncModels();
 
     // Keep admin_roles.permissions in sync with the code-defined constants so
