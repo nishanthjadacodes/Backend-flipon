@@ -32,6 +32,7 @@ import walletRoutes from './src/routes/walletRoutes.js';
 import complianceRoutes from './src/routes/complianceRoutes.js';
 import { startComplianceAlertScheduler } from './src/jobs/complianceAlerts.js';
 import { startReferralExpiryScheduler } from './src/jobs/referralExpiry.js';
+import { startRoyaltyPayoutScheduler } from './src/jobs/royaltyPayout.js';
 
 const app = express();
 
@@ -172,6 +173,11 @@ startComplianceAlertScheduler();
 // Refer & Earn — hourly sweep that flips pending Referral rows to 'expired'
 // once their 90-day window passes.
 startReferralExpiryScheduler();
+
+// Agent Referral & Royalty — credits the 2% Direct Business Royalty to
+// each qualifying referrer on the 5th of each month for the prior month.
+// Idempotent via the Royalty table; safe to run hourly.
+startRoyaltyPayoutScheduler();
 
 // Health check endpoint
 app.get('/health', (req, res) => {

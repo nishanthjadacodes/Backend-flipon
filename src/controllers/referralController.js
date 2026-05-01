@@ -98,8 +98,15 @@ const getReferralData = async (req, res) => {
 
     const downlineAgentIds = referrals.filter(r => r.referee_id).map(r => r.referee_id);
     let totalTeamBusiness = 0;
+    let qualifyingTeamBusiness = 0;     // only counts downlines hitting ₹5k/month
     let activeMentees = 0;
     let lastMonthTeamBusiness = 0;
+    let lastMonthQualifyingBusiness = 0;
+
+    // Per-downline minimum monthly turnover for royalty eligibility (per
+    // policy section 2: "Royalty is triggered only when a downline agent
+    // achieves a minimum monthly business volume of ₹5,000").
+    const PER_DOWNLINE_MIN = 5000;
 
     if (downlineAgentIds.length > 0) {
       const [thisMonthBookings, lastMonthBookings] = await Promise.all([
@@ -117,12 +124,33 @@ const getReferralData = async (req, res) => {
             status: 'completed',
             completed_at: { [Op.gte]: lastMonthStart, [Op.lt]: lastMonthEnd },
           },
-          attributes: ['price_quoted'],
+          attributes: ['agent_id', 'price_quoted'],
         }),
       ]);
-      totalTeamBusiness = thisMonthBookings.reduce((sum, b) => sum + parseFloat(b.price_quoted || 0), 0);
+
+      // Group bookings by downline agent so we can apply the ₹5k
+      // per-agent threshold before summing up the qualifying total.
+      const sumByAgent = (rows) => {
+        const m = new Map();
+        for (const b of rows) {
+          const v = parseFloat(b.price_quoted || 0);
+          m.set(b.agent_id, (m.get(b.agent_id) || 0) + v);
+        }
+        return m;
+      };
+      const qualifying = (m) =>
+        Array.from(m.values())
+          .filter((v) => v >= PER_DOWNLINE_MIN)
+          .reduce((s, v) => s + v, 0);
+
+      const thisMonthByAgent = sumByAgent(thisMonthBookings);
+      const lastMonthByAgent = sumByAgent(lastMonthBookings);
+
+      totalTeamBusiness = thisMonthBookings.reduce((s, b) => s + parseFloat(b.price_quoted || 0), 0);
+      qualifyingTeamBusiness = qualifying(thisMonthByAgent);
+      lastMonthTeamBusiness = lastMonthBookings.reduce((s, b) => s + parseFloat(b.price_quoted || 0), 0);
+      lastMonthQualifyingBusiness = qualifying(lastMonthByAgent);
       activeMentees = new Set(thisMonthBookings.map(b => b.agent_id)).size;
-      lastMonthTeamBusiness = lastMonthBookings.reduce((sum, b) => sum + parseFloat(b.price_quoted || 0), 0);
     }
 
     // Personal activity check (min 5 tasks/month for royalty eligibility)
@@ -133,11 +161,22 @@ const getReferralData = async (req, res) => {
         completed_at: { [Op.gte]: monthStart },
       },
     });
+    // Last month's personal tasks — used to show whether last month's royalty
+    // qualified retroactively (the actual credit is driven by the payout job).
+    const lastMonthPersonalTasks = await Booking.count({
+      where: {
+        agent_id: req.user.id,
+        status: 'completed',
+        completed_at: { [Op.gte]: lastMonthStart, [Op.lt]: lastMonthEnd },
+      },
+    });
 
-    const currentMonthRoyalty = personalTasks >= 5 ? Math.round(totalTeamBusiness * 0.02) : 0;
-    // Last month always pays out (qualification was checked at the time);
-    // here we just show the calculated 2% so the agent sees historical earnings.
-    const lastMonthRoyalty = Math.round(lastMonthTeamBusiness * 0.02);
+    // Royalty = 2% of *qualifying* team business, only when the referrer
+    // also clears their personal-activity floor of 5 tasks for that month.
+    const currentMonthRoyalty =
+      personalTasks >= 5 ? Math.round(qualifyingTeamBusiness * 0.02) : 0;
+    const lastMonthRoyalty =
+      lastMonthPersonalTasks >= 5 ? Math.round(lastMonthQualifyingBusiness * 0.02) : 0;
 
     // Active vs inactive flag — a referee is "active" if they have at least
     // one booking (any status except cancelled) in the last 30 days.
@@ -220,13 +259,21 @@ const getReferralData = async (req, res) => {
       milestones,
       royalty: {
         totalTeamBusiness,
+        qualifyingTeamBusiness,         // only downlines hitting ₹5k/month
         lastMonthTeamBusiness,
+        lastMonthQualifyingBusiness,
         activeMentees,
         currentMonthRoyalty,
         lastMonthRoyalty,
         personalTasksCompleted: personalTasks,
-        minimumTeamTurnoverMet: totalTeamBusiness >= 5000,
+        lastMonthPersonalTasksCompleted: lastMonthPersonalTasks,
+        // "Met" if at least one downline crossed the ₹5k threshold this
+        // month — what the policy actually requires (used to be sum-based).
+        minimumTeamTurnoverMet: qualifyingTeamBusiness > 0,
         qualityScore: parseFloat(user.rating || 0),
+        // Surfaces in the rep app so the badge / waitlist priority can light
+        // up after the Gold milestone fires.
+        priorityUser: !!user.is_priority_user,
       },
     });
   } catch (error) {
