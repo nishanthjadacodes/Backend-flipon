@@ -775,16 +775,21 @@ const updateJobStatus = async (req, res) => {
     await booking.update(updates);
 
     // If this update flips the booking to 'completed', fire the
-    // double-sided referral reward trigger here too. /verify-completion
-    // already does this, but reps can also reach 'completed' state
-    // straight via /job-status — without this call those completions
-    // would never credit the referrer.
+    // double-sided referral reward trigger here too AND auto-verify any
+    // booking documents (so the customer's UI stops showing "In Review"
+    // after the work is finished). /verify-completion already does both;
+    // mirror them here for the silent /job-status path.
     if (mapping.dbStatus === 'completed') {
-      // Re-fetch the freshly-updated booking so the trigger sees the
-      // current status + price_quoted (the in-memory `booking` object
-      // is from before the update).
       const fresh = await Booking.findByPk(id);
       if (fresh) triggerReferralRewardIfFirstBooking(fresh);
+      try {
+        await Document.update(
+          { is_verified: true, verified_at: new Date() },
+          { where: { booking_id: id, is_verified: false } },
+        );
+      } catch (docErr) {
+        console.error('[updateJobStatus] auto-verify docs failed:', docErr?.message);
+      }
     }
 
     // Surface the completion OTP back to the rep so dev/demo flows work
@@ -906,6 +911,19 @@ const verifyCompletionOTP = async (req, res) => {
 
     await booking.update(updates);
 
+    // Once the rep + customer confirm completion via OTP, the documents
+    // tied to this booking are implicitly accepted. Auto-flip is_verified
+    // so the customer's BookingDetails page no longer shows them as
+    // "In Review" after the work is finished.
+    try {
+      await Document.update(
+        { is_verified: true, verified_at: new Date() },
+        { where: { booking_id: id, is_verified: false } },
+      );
+    } catch (docErr) {
+      console.error('[verifyCompletion] auto-verify docs failed:', docErr?.message);
+    }
+
     // Update agent's rating and job count
     if (booking.agent_id && rating) {
       const agent = await User.findByPk(booking.agent_id);
@@ -934,6 +952,85 @@ const verifyCompletionOTP = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to verify completion'
+    });
+  }
+};
+
+// Customer leaves a star rating + optional written review on a completed
+// booking. Updates customer_rating / customer_feedback on the booking row
+// AND rolls the rating into the agent's average. Idempotent — can be
+// called again to update the rating before the booking is settled.
+const submitBookingReview = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rating, review, feedback } = req.body || {};
+
+    const numericRating = Number(rating);
+    if (!numericRating || numericRating < 1 || numericRating > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'rating must be between 1 and 5',
+      });
+    }
+
+    const booking = await Booking.findByPk(id);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+    if (booking.customer_id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the booking customer can submit a review',
+      });
+    }
+    if (booking.status !== 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Reviews can only be submitted for completed bookings',
+      });
+    }
+
+    await booking.update({
+      customer_rating: numericRating,
+      customer_feedback: review || feedback || null,
+    });
+
+    // Roll the new rating into the agent's running average so the rep's
+    // profile / royalty quality gate reflects fresh feedback. We store a
+    // simple running average across all of the agent's rated bookings.
+    if (booking.agent_id) {
+      const ratedBookings = await Booking.findAll({
+        where: {
+          agent_id: booking.agent_id,
+          customer_rating: { [Op.ne]: null },
+        },
+        attributes: ['customer_rating'],
+      });
+      const sum = ratedBookings.reduce(
+        (s, b) => s + Number(b.customer_rating || 0),
+        0,
+      );
+      const avg = ratedBookings.length > 0 ? sum / ratedBookings.length : 0;
+      await User.update(
+        { rating: avg.toFixed(1) },
+        { where: { id: booking.agent_id } },
+      );
+    }
+
+    res.json({
+      success: true,
+      message: 'Thanks for your feedback',
+      data: {
+        bookingId: id,
+        customer_rating: numericRating,
+        customer_feedback: review || feedback || null,
+      },
+    });
+  } catch (error) {
+    console.error('Submit review error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit review',
     });
   }
 };
@@ -1335,6 +1432,7 @@ export {
   updateBookingStatus,
   updateJobStatus,
   verifyCompletionOTP,
+  submitBookingReview,
   getAgentBookings,
   cancelBooking,
   uploadDocument,

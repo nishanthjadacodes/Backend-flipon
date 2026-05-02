@@ -7,6 +7,7 @@ import {
   updateBookingStatus,
   updateJobStatus,
   verifyCompletionOTP,
+  submitBookingReview,
   cancelBooking,
   uploadDocument,
   acceptTask,
@@ -62,6 +63,7 @@ router.put('/:id/status', auth, updateBookingStatus); // accept/reject
 router.put('/:id/job-status', auth, updateJobStatus); // documents_collected, submitted, completed
 router.post('/:id/accept', auth, acceptTask); // Accept task
 router.post('/:id/reject', auth, rejectTask); // Reject task
+router.post('/:id/review', auth, submitBookingReview); // customer rates the booking
 
 // Admin agent assignment route
 router.post('/:id/assign-agent', auth, (req, res, next) => {
