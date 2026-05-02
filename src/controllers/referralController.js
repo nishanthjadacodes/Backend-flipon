@@ -368,4 +368,100 @@ const applyReferralCode = async (req, res) => {
   }
 };
 
-export { generateReferralCode, getReferralData, trackReferralClick, getReferralStats, applyReferralCode };
+// POST /api/referrals/backfill — backstop for referrals that should have
+// been credited but weren't (e.g. completions that happened before the
+// trigger was wired into /job-status). Scans every still-pending Referral
+// row owned by the caller, checks if the referee has any completed
+// booking ≥ ₹99, and fires the credit if so. Idempotent — only updates
+// rows that are actually still 'pending'.
+//
+// Safe to expose to authenticated reps: they can only backfill their own
+// rewards, and the policy gates (≥₹99, status='pending') stay intact.
+const backfillMissedReferralRewards = async (req, res) => {
+  try {
+    const { Booking, sequelize } = await import('../models/index.js');
+    const { creditWallet } = await import('./walletController.js');
+    const { Op } = await import('sequelize');
+
+    const pending = await Referral.findAll({
+      where: { referrer_id: req.user.id, status: 'pending' },
+    });
+    if (pending.length === 0) {
+      return res.json({ success: true, credited: 0, message: 'Nothing to backfill.' });
+    }
+
+    let credited = 0;
+    let totalAmount = 0;
+    for (const ref of pending) {
+      // Find the earliest completed booking where the referee was either
+      // the customer OR the agent — whichever direction the policy fires
+      // for this referral.
+      const firstCompleted = await Booking.findOne({
+        where: {
+          status: 'completed',
+          [Op.or]: [{ customer_id: ref.referee_id }, { agent_id: ref.referee_id }],
+        },
+        order: [['completed_at', 'ASC']],
+        attributes: ['id', 'price_quoted', 'completed_at'],
+      });
+      if (!firstCompleted) continue;
+      const value = parseFloat(firstCompleted.price_quoted || 0);
+      if (value < 99) {
+        // Mark as completed so it stops surfacing in pending lists, but
+        // don't credit (sub-₹99 booking, per policy).
+        await ref.update({
+          status: 'completed',
+          first_service_completed_at: firstCompleted.completed_at || new Date(),
+        });
+        continue;
+      }
+
+      const t = await sequelize.transaction();
+      try {
+        await ref.update(
+          {
+            status: 'completed',
+            first_service_completed_at: firstCompleted.completed_at || new Date(),
+            credited_at: new Date(),
+          },
+          { transaction: t },
+        );
+        await creditWallet({
+          userId: ref.referrer_id,
+          amount: 20,
+          source: 'referral_reward',
+          description: 'Backfilled — referee\'s first paid service',
+          bookingId: firstCompleted.id,
+          transaction: t,
+        });
+        await t.commit();
+        credited += 1;
+        totalAmount += 20;
+      } catch (e) {
+        await t.rollback();
+        console.error('[referral-backfill] failed for referral', ref.id, e?.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      credited,
+      totalAmount,
+      message: credited > 0
+        ? `Credited ₹${totalAmount} across ${credited} previously-missed referral(s).`
+        : 'No referrals were eligible — referees haven\'t completed a paid service yet.',
+    });
+  } catch (error) {
+    console.error('Backfill error:', error);
+    res.status(500).json({ success: false, message: 'Backfill failed' });
+  }
+};
+
+export {
+  generateReferralCode,
+  getReferralData,
+  trackReferralClick,
+  getReferralStats,
+  applyReferralCode,
+  backfillMissedReferralRewards,
+};

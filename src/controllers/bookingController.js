@@ -96,8 +96,12 @@ const creditReferralReward = async ({ referral, bookingId, bookingValue, referee
 //      their first task as the agent → original referrer gets ₹20
 //      (matched on Referral.referee_id = booking.agent_id).
 //
-// The earlier version only handled #1, which is why agent-to-agent
-// rewards never landed — the trigger looked at the wrong user_id field.
+// Idempotency comes solely from Referral.status='pending' — once the
+// reward has fired we flip the row to 'completed' and a re-fire would
+// no-op because the WHERE clause won't match. We DON'T also gate on
+// "this is the user's first completed booking" any more, because that
+// silently swallows rewards for users who had earlier completions
+// before the trigger started looking at agent_id.
 const triggerReferralRewardIfFirstBooking = async (booking) => {
   try {
     const bookingValue = parseFloat(booking.price_quoted || 0);
@@ -108,17 +112,12 @@ const triggerReferralRewardIfFirstBooking = async (booking) => {
         where: { referee_id: booking.customer_id, status: 'pending' },
       });
       if (customerReferral) {
-        const completedAsCustomer = await Booking.count({
-          where: { customer_id: booking.customer_id, status: 'completed' },
+        await creditReferralReward({
+          referral: customerReferral,
+          bookingId: booking.id,
+          bookingValue,
+          refereeRole: 'customer',
         });
-        if (completedAsCustomer <= 1) {
-          await creditReferralReward({
-            referral: customerReferral,
-            bookingId: booking.id,
-            bookingValue,
-            refereeRole: 'customer',
-          });
-        }
       }
     }
 
@@ -128,17 +127,12 @@ const triggerReferralRewardIfFirstBooking = async (booking) => {
         where: { referee_id: booking.agent_id, status: 'pending' },
       });
       if (agentReferral) {
-        const completedAsAgent = await Booking.count({
-          where: { agent_id: booking.agent_id, status: 'completed' },
+        await creditReferralReward({
+          referral: agentReferral,
+          bookingId: booking.id,
+          bookingValue,
+          refereeRole: 'agent',
         });
-        if (completedAsAgent <= 1) {
-          await creditReferralReward({
-            referral: agentReferral,
-            bookingId: booking.id,
-            bookingValue,
-            refereeRole: 'agent',
-          });
-        }
       }
     }
   } catch (e) {
@@ -779,6 +773,19 @@ const updateJobStatus = async (req, res) => {
     }
 
     await booking.update(updates);
+
+    // If this update flips the booking to 'completed', fire the
+    // double-sided referral reward trigger here too. /verify-completion
+    // already does this, but reps can also reach 'completed' state
+    // straight via /job-status — without this call those completions
+    // would never credit the referrer.
+    if (mapping.dbStatus === 'completed') {
+      // Re-fetch the freshly-updated booking so the trigger sees the
+      // current status + price_quoted (the in-memory `booking` object
+      // is from before the update).
+      const fresh = await Booking.findByPk(id);
+      if (fresh) triggerReferralRewardIfFirstBooking(fresh);
+    }
 
     // Surface the completion OTP back to the rep so dev/demo flows work
     // even when push/SMS delivery to the customer isn't configured. The
