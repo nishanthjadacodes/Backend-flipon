@@ -39,9 +39,12 @@ export const b2bPipeline = async (req, res) => {
         limit: 500,
       }),
       Enquiry.findAll({
-        // Only surface enquiries that are still "open" — accepted ones spawn
-        // a booking which takes over, so dropping them here avoids duplicates.
-        where: { status: { [Op.in]: ['pending', 'quoted', 'rejected'] } },
+        // Surface every "open" enquiry plus accepted ones that haven't
+        // been converted to a booking yet. Accepted enquiries are the
+        // signal to the admin that they need to click Convert-to-Booking;
+        // we filter out any whose booking has already been created
+        // further down to avoid duplicate cards.
+        where: { status: { [Op.in]: ['pending', 'quoted', 'accepted', 'rejected'] } },
         include: [
           { model: Service, as: 'service', attributes: ['id', 'name', 'category'] },
           { model: User, as: 'customer', attributes: ['id', 'name', 'email'] },
@@ -61,10 +64,26 @@ export const b2bPipeline = async (req, res) => {
       cancelled: [],
     };
 
+    // Build a Set of enquiry IDs that already have a corresponding booking
+    // — the Convert-to-Booking action stamps "enquiry:<id>" into the
+    // booking's notes. Without this filter, an accepted enquiry plus its
+    // converted booking would show as two cards in the same column.
+    const convertedEnquiryIds = new Set();
+    bookings.forEach((b) => {
+      const m = String(b.notes || '').match(/enquiry:([0-9a-f-]{8,})/i);
+      if (m) convertedEnquiryIds.add(m[1]);
+    });
+
     // Normalise enquiry rows to a "card" shape the frontend can render
     // alongside booking cards. Marked with kind:'enquiry' so the UI can
-    // show a distinct badge + quote/accept actions.
+    // show a distinct badge + quote/accept actions. Quote fields are
+    // included so the detail panel can show the quoted total + cycle
+    // when the admin opens an accepted enquiry to convert it.
     enquiries.forEach((e) => {
+      // Skip accepted enquiries that have already been converted into a
+      // booking — the booking card is now the source of truth for them.
+      if (e.status === 'accepted' && convertedEnquiryIds.has(e.id)) return;
+
       const card = {
         kind: 'enquiry',
         id: e.id,
@@ -75,6 +94,12 @@ export const b2bPipeline = async (req, res) => {
         customer: e.customer,
         company: e.companyProfile,
         urgency: e.urgency,
+        notes: e.notes || null,
+        quote_service_fee: e.quote_service_fee,
+        quote_govt_fees: e.quote_govt_fees,
+        quote_cycle: e.quote_cycle,
+        quote_valid_until: e.quote_valid_until,
+        quote_terms: e.quote_terms,
       };
       if (e.status === 'rejected') stages.cancelled.push(card);
       else stages.application_submitted.push(card);
