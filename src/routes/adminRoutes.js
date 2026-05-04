@@ -40,7 +40,7 @@ import {
   listAdmins, createAdmin, updateAdmin, deactivateAdmin,
   forfeitRoyaltyForQuarter, clearRoyaltyForfeit, terminateForSelfReferral,
 } from '../controllers/adminUsersController.js';
-import { bulkUploadMiddleware, bulkAgents, bulkServices } from '../controllers/bulkUploadController.js';
+import { bulkUploadMiddleware, bulkAgents, bulkServices, bulkB2BCustomers } from '../controllers/bulkUploadController.js';
 import auth from '../middleware/auth.js';
 import { requirePermission, requireRoles } from '../middleware/rbac.js';
 import { PERMISSIONS } from '../constants/permissions.js';
@@ -136,5 +136,25 @@ router.post('/enquiries/:id/convert-to-booking', requirePermission(PERMISSIONS.B
 // Bulk upload (Super Admin only — BULK_UPLOAD)
 router.post('/bulk/agents', requirePermission(PERMISSIONS.BULK_UPLOAD), bulkUploadMiddleware, bulkAgents);
 router.post('/bulk/services', requirePermission(PERMISSIONS.BULK_UPLOAD), bulkUploadMiddleware, bulkServices);
+router.post('/bulk/b2b-customers', requirePermission(PERMISSIONS.BULK_UPLOAD), bulkUploadMiddleware, bulkB2BCustomers);
+// Static template download — admins click this to grab a sample CSV with
+// the right column headers. Plain text response, no auth needed for the
+// template itself (the upload route still requires BULK_UPLOAD perm).
+router.get('/bulk/b2b-customers/template', (_req, res) => {
+  const csv =
+    'gstin,company_name,brand_name,entity_type,pan,tan,cin,' +
+    'registered_address,factory_address,' +
+    'kdm_name,kdm_mobile,kdm_email,' +
+    'poc_name,poc_designation,poc_mobile,poc_email,' +
+    'msme_category,nic_code\n' +
+    '22AAAAA0000A1Z5,Acme Industries Pvt Ltd,Acme,Pvt Ltd,AAAPL1234C,BLRA99999B,U12345KA2020PTC123456,' +
+    '"Plot 12, MIDC Phase 2, Pune 411019","Plot 14, MIDC Phase 2, Pune 411019",' +
+    'Ramesh Kumar,9876543210,ramesh@acme.com,' +
+    'Priya Sharma,Admin Manager,9876500001,priya@acme.com,' +
+    'small,28910\n';
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="b2b-customers-template.csv"');
+  res.send(csv);
+});
 
 export default router;

@@ -1,5 +1,6 @@
 import { Service, Booking, sequelize } from '../models/index.js';
 import { Op } from 'sequelize';
+import { getChecklistForCategory } from '../config/b2bDocChecklists.js';
 
 const getAllServices = async (req, res) => {
   try {
@@ -58,9 +59,19 @@ const getServiceById = async (req, res) => {
       });
     }
 
+    // For industrial / B2B services, attach the per-category document
+    // checklist (Bank Statements + DSC for GST, Building Plans for NOC,
+    // etc. — see src/config/b2bDocChecklists.js). Frontend uses this to
+    // render the upload list on the EnquiryScreen. Returns null for
+    // categories that don't match a known industrial bucket — frontend
+    // skips the section in that case.
+    const checklist = getChecklistForCategory(service.category);
     res.json({
       success: true,
-      data: service
+      data: {
+        ...service.toJSON(),
+        b2b_doc_checklist: checklist,
+      }
     });
   } catch (error) {
     console.error('Error fetching service:', error);
