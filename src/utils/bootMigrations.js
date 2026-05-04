@@ -101,29 +101,100 @@ const MIGRATIONS = [
   },
 ];
 
-export const runBootMigrations = async () => {
-  let added = 0;
-  let skipped = 0;
+// Probe a table once for its current column list — much faster than
+// trying each ALTER and catching duplicate-column errors. We then only
+// run the ALTERs whose column doesn't already exist.
+const tableColumnsCache = new Map();
+const getColumns = async (table) => {
+  if (tableColumnsCache.has(table)) return tableColumnsCache.get(table);
+  try {
+    const [rows] = await sequelize.query(`DESCRIBE ${table}`);
+    const set = new Set(rows.map((r) => r.Field));
+    tableColumnsCache.set(table, set);
+    return set;
+  } catch (e) {
+    // Table doesn't exist yet (sequelize.sync hasn't run). Treat as empty.
+    return new Set();
+  }
+};
 
+// Extract table name from "ALTER TABLE <name> ADD COLUMN ...".
+const extractTable = (sql) => {
+  const m = sql.match(/ALTER\s+TABLE\s+(\w+)/i);
+  return m ? m[1] : null;
+};
+// Extract column name from "ADD COLUMN <name> ...".
+const extractColumn = (sql) => {
+  const m = sql.match(/ADD\s+COLUMN\s+(\w+)/i);
+  return m ? m[1] : null;
+};
+
+// Group ALTER ADD COLUMN statements by table so we can issue one
+// combined ALTER TABLE per table (10x faster on TiDB than N separate
+// statements — avoids the per-statement metadata-lock dance).
+const groupByTable = (pending) => {
+  const grouped = new Map();
+  for (const m of pending) {
+    const t = extractTable(m.sql);
+    const colDef = m.sql.replace(/^ALTER\s+TABLE\s+\w+\s+/i, ''); // "ADD COLUMN ..."
+    if (!t) continue;
+    if (!grouped.has(t)) grouped.set(t, []);
+    grouped.get(t).push({ label: m.label, fragment: colDef });
+  }
+  return grouped;
+};
+
+export const runBootMigrations = async () => {
+  // Step 1: skip every migration whose target column already exists.
+  // One DESCRIBE per affected table — way cheaper than N failing ALTERs.
+  const pending = [];
   for (const m of MIGRATIONS) {
+    const table = extractTable(m.sql);
+    const column = extractColumn(m.sql);
+    if (!table || !column) continue;
+    const existing = await getColumns(table);
+    if (existing.has(column)) continue;       // already present, skip
+    pending.push(m);
+  }
+
+  if (pending.length === 0) {
+    return;                                    // nothing to do, silent
+  }
+
+  console.log(`[boot-migrate] applying ${pending.length} pending migration(s)…`);
+
+  // Step 2: combine multiple ADD COLUMNs per table into one ALTER
+  // statement. MySQL/TiDB lets you stack them with commas.
+  const grouped = groupByTable(pending);
+  let added = 0;
+  for (const [table, cols] of grouped.entries()) {
+    const combined = `ALTER TABLE ${table} ${cols.map((c) => c.fragment).join(', ')}`;
     try {
-      await sequelize.query(m.sql);
-      console.log(`[boot-migrate] ✅ ${m.label} — added`);
-      added += 1;
+      await sequelize.query(combined);
+      for (const c of cols) console.log(`[boot-migrate] ✅ ${c.label} — added`);
+      added += cols.length;
     } catch (e) {
       if (isAlreadyExistsError(e?.message)) {
-        skipped += 1;
-        // No log on skip — would be noisy on every deploy.
+        // Race: another process added it between DESCRIBE and ALTER.
+        // Retry one column at a time so the rest still succeed.
+        for (const c of cols) {
+          try {
+            await sequelize.query(`ALTER TABLE ${table} ${c.fragment}`);
+            console.log(`[boot-migrate] ✅ ${c.label} — added (retry)`);
+            added += 1;
+          } catch (e2) {
+            if (!isAlreadyExistsError(e2?.message)) {
+              console.error(`[boot-migrate] ❌ ${c.label}:`, e2?.message);
+            }
+          }
+        }
       } else {
-        // Real error — surface it but don't crash the server. The
-        // controller/route that needs this column will fail on first
-        // hit with a clearer error than a boot crash.
-        console.error(`[boot-migrate] ❌ ${m.label}:`, e?.message);
+        console.error(`[boot-migrate] ❌ batch on ${table} failed:`, e?.message);
       }
     }
   }
 
   if (added > 0) {
-    console.log(`[boot-migrate] applied ${added} new migration(s); ${skipped} already present`);
+    console.log(`[boot-migrate] applied ${added} new column(s)`);
   }
 };

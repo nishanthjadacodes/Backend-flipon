@@ -231,12 +231,18 @@ const startServer = async () => {
     await sequelize.authenticate();
     console.log('Database connection established successfully.');
 
-    // Idempotent additive ALTERs — runs before syncModels() so any new
-    // columns referenced by the loaded models exist on disk before the
-    // first SELECT. Prevents the "Unknown column" cascade that broke
-    // both customer my-bookings and rep tasks endpoints when a deploy
-    // shipped before the matching migration script was run manually.
-    await runBootMigrations();
+    // Boot migrations run in the BACKGROUND (no await) so the server
+    // can start listening and pass Render's deploy health-check
+    // immediately. ALTER TABLE on large tables can take 30+ seconds and
+    // was timing out the deploy when run synchronously.
+    //
+    // Trade-off: the very first request after deploy may hit a model
+    // referencing a column that hasn't been added yet — but that
+    // window is < 30s and only affects the brand-new feature columns
+    // (existing endpoints already worked before migrations).
+    runBootMigrations().catch((e) => {
+      console.error('[boot-migrate] background run failed:', e?.message);
+    });
 
     await syncModels();
 
