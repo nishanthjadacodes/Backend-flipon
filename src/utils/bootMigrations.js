@@ -39,6 +39,45 @@ const MIGRATIONS = [
     label: 'bookings.referral_discount',
     sql: 'ALTER TABLE bookings ADD COLUMN referral_discount DECIMAL(10,2) NULL DEFAULT 0',
   },
+  // B2B / Industrial enquiry quote fields. Without these the
+  // "Send Quote to Customer" button in the admin dashboard fails
+  // silently because enquiry.update({...quote fields}) → Unknown column.
+  {
+    label: 'enquiries.quote_service_fee',
+    sql: 'ALTER TABLE enquiries ADD COLUMN quote_service_fee DECIMAL(10,2) NULL',
+  },
+  {
+    label: 'enquiries.quote_govt_fees',
+    sql: 'ALTER TABLE enquiries ADD COLUMN quote_govt_fees DECIMAL(10,2) NULL',
+  },
+  {
+    label: 'enquiries.quote_cycle',
+    sql: 'ALTER TABLE enquiries ADD COLUMN quote_cycle VARCHAR(20) NULL',
+  },
+  {
+    label: 'enquiries.quote_valid_until',
+    sql: 'ALTER TABLE enquiries ADD COLUMN quote_valid_until DATETIME NULL',
+  },
+  {
+    label: 'enquiries.quote_terms',
+    sql: 'ALTER TABLE enquiries ADD COLUMN quote_terms TEXT NULL',
+  },
+  {
+    label: 'enquiries.quote_issued_at',
+    sql: 'ALTER TABLE enquiries ADD COLUMN quote_issued_at DATETIME NULL',
+  },
+  {
+    label: 'enquiries.assigned_admin_id',
+    sql: 'ALTER TABLE enquiries ADD COLUMN assigned_admin_id CHAR(36) NULL',
+  },
+  {
+    label: 'enquiries.responded_at',
+    sql: 'ALTER TABLE enquiries ADD COLUMN responded_at DATETIME NULL',
+  },
+  {
+    label: 'enquiries.completed_at',
+    sql: 'ALTER TABLE enquiries ADD COLUMN completed_at DATETIME NULL',
+  },
   // Smart Alert / Compliance Vault
   {
     label: 'vault_documents.compliance_type',
