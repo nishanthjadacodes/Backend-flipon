@@ -1,4 +1,5 @@
-import { Enquiry, EnquiryStage, Service, CompanyProfile, User } from '../models/index.js';
+import { Enquiry, EnquiryStage, Service, CompanyProfile, User, Booking, sequelize } from '../models/index.js';
+import { Op } from 'sequelize';
 import { getStageTemplate } from '../services/stageTemplates.js';
 import { sendPushNotification } from '../services/notificationService.js';
 
@@ -335,6 +336,12 @@ export const updateEnquiryStage = async (req, res) => {
 };
 
 // ─── POST /api/enquiries/:id/accept ─────────────────────────────────────────
+// Customer accepts the quote we sent earlier. Three things happen:
+//   1. Enquiry.status flips quoted → accepted.
+//   2. We push a confirmation back to the customer (kept brief; no
+//      payment-method copy here — admin handles the next step).
+//   3. We push every admin so they know to assign a rep / convert
+//      this enquiry into a Booking.
 export const acceptQuote = async (req, res) => {
   try {
     const enquiry = await Enquiry.findOne({
@@ -349,14 +356,142 @@ export const acceptQuote = async (req, res) => {
     notifyCustomerAsync(
       enquiry.customer_id,
       'Quote Accepted',
-      'We have recorded your acceptance. Invoice is on the way.',
+      'Acceptance recorded. Our admin will assign a service representative shortly.',
       { type: 'enquiry', enquiry_id: enquiry.id, action: 'accepted' },
     );
+
+    // Notify every admin — fire-and-forget, never blocks the response.
+    (async () => {
+      try {
+        const customer = await User.findByPk(enquiry.customer_id, { attributes: ['name'] });
+        const service = enquiry.service_id
+          ? await Service.findByPk(enquiry.service_id, { attributes: ['name'] })
+          : null;
+        const ADMIN_ROLES = [
+          'super_admin', 'operations_manager', 'b2b_admin',
+          'finance_admin', 'customer_support',
+        ];
+        const admins = await User.findAll({
+          where: { role: { [Op.in]: ADMIN_ROLES }, is_active: true },
+          attributes: ['id'],
+        });
+        const title = '✅ Quote accepted';
+        const body = `${customer?.name || 'Customer'} accepted the quote for ${service?.name || 'an industrial service'}. Convert to a Booking and assign a rep.`;
+        await Promise.all(
+          admins.map((a) =>
+            sendPushNotification(a.id, {
+              title, body,
+              data: { type: 'enquiry_accepted', enquiry_id: enquiry.id },
+              priority: 'high',
+            }).catch(() => {}),
+          ),
+        );
+      } catch (e) {
+        console.log('[acceptQuote] admin fanout failed:', e?.message);
+      }
+    })();
 
     res.json({ success: true, data: enquiry });
   } catch (error) {
     console.error('acceptQuote error:', error);
     res.status(500).json({ success: false, message: 'Failed to accept quote' });
+  }
+};
+
+// ─── POST /api/admin/enquiries/:id/convert-to-booking ───────────────────────
+// Once the customer accepts the quote, an admin "promotes" the enquiry
+// into a Booking row so the standard rep-assignment + execution flow
+// can take over. Idempotent: if a booking already exists for this
+// enquiry (matched on Booking.notes containing the enquiry id, since
+// we don't have a foreign-key column yet), the existing one is returned.
+export const convertEnquiryToBooking = async (req, res) => {
+  try {
+    const enquiry = await Enquiry.findByPk(req.params.id);
+    if (!enquiry) return res.status(404).json({ success: false, message: 'Enquiry not found' });
+    if (enquiry.status !== 'accepted') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot convert — enquiry status is '${enquiry.status}', expected 'accepted'.`,
+      });
+    }
+    if (!enquiry.service_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enquiry has no service_id — cannot create booking.',
+      });
+    }
+
+    // Reuse if a booking was already converted (avoid duplicate Booking
+    // rows when the admin double-clicks).
+    const existing = await Booking.findOne({
+      where: {
+        customer_id: enquiry.customer_id,
+        service_id: enquiry.service_id,
+        notes: { [Op.like]: `%enquiry:${enquiry.id}%` },
+      },
+    });
+    if (existing) {
+      return res.json({
+        success: true,
+        data: existing,
+        message: 'Booking already exists for this enquiry.',
+      });
+    }
+
+    // Compute next booking_number — best-effort, NULL on failure.
+    let bookingNumber = null;
+    try {
+      const [rows] = await sequelize.query(
+        'SELECT COALESCE(MAX(booking_number), 0) + 1 AS next FROM bookings',
+      );
+      bookingNumber = rows?.[0]?.next || null;
+    } catch (_) { /* fall through with NULL */ }
+
+    const customer = await User.findByPk(enquiry.customer_id, {
+      attributes: ['name', 'mobile', 'email'],
+    });
+
+    const totalQuoted =
+      Number(enquiry.quote_service_fee || 0) + Number(enquiry.quote_govt_fees || 0);
+
+    const booking = await Booking.create({
+      customer_id: enquiry.customer_id,
+      service_id: enquiry.service_id,
+      booking_type: 'industrial',
+      customer_name: customer?.name || null,
+      customer_mobile: customer?.mobile || null,
+      customer_email: customer?.email || null,
+      service_address: 'To be confirmed by representative',
+      status: 'pending',                 // ready for admin to assign a rep
+      price_quoted: totalQuoted,
+      priority: enquiry.urgency === 'urgent' ? 'urgent'
+                : enquiry.urgency === 'fast_track' ? 'high'
+                : 'medium',
+      booking_number: bookingNumber,
+      notes: [
+        `Converted from B2B enquiry:${enquiry.id}`,
+        enquiry.notes ? `Customer notes: ${enquiry.notes}` : null,
+        enquiry.quote_terms ? `Quoted terms: ${enquiry.quote_terms}` : null,
+        enquiry.quote_cycle ? `Billing cycle: ${enquiry.quote_cycle}` : null,
+      ].filter(Boolean).join('\n'),
+    });
+
+    // Tell the customer their job is officially in the work queue.
+    notifyCustomerAsync(
+      enquiry.customer_id,
+      '🚀 Work scheduled',
+      'Admin has scheduled your service. A representative will be assigned shortly.',
+      { type: 'booking_created', booking_id: booking.id, enquiry_id: enquiry.id },
+    );
+
+    res.json({
+      success: true,
+      data: booking,
+      message: 'Enquiry converted to booking. Assign a representative from Order Management.',
+    });
+  } catch (error) {
+    console.error('convertEnquiryToBooking error:', error);
+    res.status(500).json({ success: false, message: 'Failed to convert enquiry' });
   }
 };
 

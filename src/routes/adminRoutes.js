@@ -35,7 +35,7 @@ import {
 import { listAuditLogs } from '../controllers/auditController.js';
 import { getConfig, updateConfig } from '../controllers/platformConfigController.js';
 import { b2bPipeline, updateMilestone } from '../controllers/b2bController.js';
-import { listAllEnquiriesForAdmin, issueQuoteAdmin, rejectEnquiryAdmin } from '../controllers/enquiryController.js';
+import { listAllEnquiriesForAdmin, issueQuoteAdmin, rejectEnquiryAdmin, convertEnquiryToBooking } from '../controllers/enquiryController.js';
 import {
   listAdmins, createAdmin, updateAdmin, deactivateAdmin,
   forfeitRoyaltyForQuarter, clearRoyaltyForfeit, terminateForSelfReferral,
@@ -131,6 +131,7 @@ router.put('/b2b/bookings/:id/milestone', requirePermission(PERMISSIONS.B2B_PIPE
 router.get('/enquiries', requirePermission(PERMISSIONS.B2B_PIPELINE), listAllEnquiriesForAdmin);
 router.post('/enquiries/:id/quote', requirePermission(PERMISSIONS.B2B_PIPELINE), issueQuoteAdmin);
 router.post('/enquiries/:id/reject', requirePermission(PERMISSIONS.B2B_PIPELINE), rejectEnquiryAdmin);
+router.post('/enquiries/:id/convert-to-booking', requirePermission(PERMISSIONS.B2B_PIPELINE), convertEnquiryToBooking);
 
 // Bulk upload (Super Admin only — BULK_UPLOAD)
 router.post('/bulk/agents', requirePermission(PERMISSIONS.BULK_UPLOAD), bulkUploadMiddleware, bulkAgents);
