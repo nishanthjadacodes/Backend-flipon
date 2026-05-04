@@ -9,6 +9,7 @@ import {
   verifyCompletionOTP,
   submitBookingReview,
   cancelBooking,
+  customerRescheduleBooking,
   uploadDocument,
   acceptTask,
   rejectTask,
@@ -58,6 +59,7 @@ router.get('/tasks', auth, getAgentTasks);
 // Parameterized routes (/:id catches anything — must be last)
 router.get('/:id', auth, getBookingDetails);
 router.put('/:id/cancel', auth, cancelBooking);
+router.put('/:id/reschedule', auth, customerRescheduleBooking); // customer self-reschedule, 2h gate
 router.post('/:id/upload-document', auth, upload.single('document'), uploadDocument);
 router.put('/:id/status', auth, updateBookingStatus); // accept/reject
 router.put('/:id/job-status', auth, updateJobStatus); // documents_collected, submitted, completed

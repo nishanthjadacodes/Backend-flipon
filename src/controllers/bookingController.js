@@ -1082,6 +1082,95 @@ const getAgentBookings = async (req, res) => {
 };
 
 // Cancel booking (customer)
+// Customer-facing reschedule. Per the FliponeX booking-window spec,
+// the customer can move the slot only if the new request lands >=2h
+// before the CURRENT scheduled time — closer than that and the rep
+// may already be en-route. Inside the 2h window we 400 with a clear
+// message; the customer's option then is to call/cancel.
+const customerRescheduleBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { preferred_date, preferred_time, reason } = req.body || {};
+
+    if (!preferred_date && !preferred_time) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide preferred_date and/or preferred_time to reschedule',
+      });
+    }
+
+    const booking = await Booking.findByPk(id);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+    if (booking.customer_id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only reschedule your own bookings',
+      });
+    }
+    if (!['pending', 'assigned', 'accepted'].includes(booking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot reschedule a "${booking.status}" booking. Contact support if you need help.`,
+      });
+    }
+
+    const start = scheduledStartTime(booking);
+    if (start) {
+      const minutesUntil = (start.getTime() - Date.now()) / 60000;
+      if (minutesUntil < 120) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Reschedule window has closed — the slot is less than 2 hours away. ' +
+            'Cancel the booking instead, or contact support to rearrange.',
+        });
+      }
+    }
+
+    const updates = {};
+    if (preferred_date) updates.preferred_date = preferred_date;
+    if (preferred_time) updates.preferred_time = preferred_time;
+    const stamp = `[reschedule ${new Date().toISOString()}] customer${reason ? `: ${reason}` : ''}`;
+    updates.notes = booking.notes ? `${booking.notes}\n${stamp}` : stamp;
+
+    await booking.update(updates);
+    res.json({
+      success: true,
+      data: booking,
+      message: 'Booking rescheduled — no charges. The representative will see the new slot.',
+    });
+  } catch (error) {
+    console.error('customerRescheduleBooking error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reschedule booking' });
+  }
+};
+
+// Compose the booking's scheduled "start" instant from preferred_date +
+// preferred_time. Returns null if either is missing or unparseable —
+// caller should treat that as "no schedule, no window enforcement".
+const scheduledStartTime = (booking) => {
+  if (!booking?.preferred_date) return null;
+  const dateStr = String(booking.preferred_date).split('T')[0];
+  const raw = String(booking.preferred_time || '').trim();
+  // Try "HH:MM AM - HH:MM AM" then "HH:MM"
+  let h = 0, m = 0;
+  const ampm = raw.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+  if (ampm) {
+    h = parseInt(ampm[1], 10);
+    m = parseInt(ampm[2], 10);
+    const mer = ampm[3];
+    if (mer && mer.toUpperCase() === 'PM' && h < 12) h += 12;
+    if (mer && mer.toUpperCase() === 'AM' && h === 12) h = 0;
+  } else {
+    return null;
+  }
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setHours(h, m, 0, 0);
+  return d;
+};
+
 const cancelBooking = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1110,16 +1199,34 @@ const cancelBooking = async (req, res) => {
       });
     }
 
+    // Free-cancellation window — per spec, customers get free cancellation
+    // up to 1 hour before the scheduled slot. Cancellations inside that
+    // window are still allowed (we never strand a customer), but a flag is
+    // set so admin can decide whether to apply a Visit Fee on the next
+    // booking. The customer is told upfront via the response message.
+    const start = scheduledStartTime(booking);
+    let withinWindow = false;
+    if (start) {
+      const minutesUntil = (start.getTime() - Date.now()) / 60000;
+      withinWindow = minutesUntil < 60; // less than 1 hour to start
+    }
+
     await booking.update({
       status: 'cancelled',
       cancelled_at: new Date(),
-      cancellation_reason: reason || 'Customer cancelled'
+      cancellation_reason: reason || 'Customer cancelled',
+      // late_cancellation: withinWindow,    // schema column TBD; flag in notes for now
+      notes: withinWindow
+        ? [booking.notes || '', '[late-cancel] Cancelled within 1h of scheduled start; visit fee may apply on next booking.'].filter(Boolean).join('\n')
+        : booking.notes,
     });
 
     res.json({
       success: true,
       data: booking,
-      message: 'Booking cancelled successfully'
+      message: withinWindow
+        ? 'Booking cancelled. As you cancelled within 1 hour of the scheduled time, a small visit fee may be added to your next booking.'
+        : 'Booking cancelled successfully — no charges, you were within the free-cancellation window.',
     });
   } catch (error) {
     console.error('Error cancelling booking:', error);
@@ -1435,6 +1542,7 @@ export {
   submitBookingReview,
   getAgentBookings,
   cancelBooking,
+  customerRescheduleBooking,
   uploadDocument,
   acceptTask,
   rejectTask,
