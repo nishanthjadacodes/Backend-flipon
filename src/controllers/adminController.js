@@ -1,6 +1,88 @@
 import { Service, User, Booking } from '../models/index.js';
+import { Op } from 'sequelize';
 import { getIoInstance } from '../config/socket.js';
 import { sendPushNotification } from '../services/notificationService.js';
+
+// Parse "HH:MM - HH:MM" / "HH:MM AM - HH:MM AM" / "HH:MM" into a [startMin, endMin]
+// pair (minutes since midnight). Returns null if unparseable so the caller
+// can skip the buffer check rather than reject the assignment outright.
+const parseSlot = (raw) => {
+  if (!raw) return null;
+  const text = String(raw).trim();
+
+  // 12-hour format: "10:00 AM - 11:00 AM" → [600, 660]
+  const ampm = text.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+  if (ampm) {
+    const toMin = (h, m, mer) => {
+      let H = parseInt(h, 10);
+      if (mer && mer.toUpperCase() === 'PM' && H < 12) H += 12;
+      if (mer && mer.toUpperCase() === 'AM' && H === 12) H = 0;
+      return H * 60 + parseInt(m, 10);
+    };
+    return [toMin(ampm[1], ampm[2], ampm[3]), toMin(ampm[4], ampm[5], ampm[6] || ampm[3])];
+  }
+  // 24-hour single time: "10:00" → [600, 660] (assume 1-hour slot)
+  const single = text.match(/^(\d{1,2}):(\d{2})$/);
+  if (single) {
+    const start = parseInt(single[1], 10) * 60 + parseInt(single[2], 10);
+    return [start, start + 60];
+  }
+  return null;
+};
+
+// Per the FliponeX spec: "30-minute buffer will be maintained between
+// every booking to ensure the agent can travel between locations easily."
+// We check both directions — the new slot can't START within 30min of an
+// existing booking's END, and the new slot can't END within 30min of an
+// existing booking's START.
+const BUFFER_MIN = 30;
+
+// Check whether assigning `agentId` to `targetBooking` would violate the
+// 30-minute travel buffer. Returns null if OK, or an error string with
+// the conflicting slot details if not.
+const checkBufferConflict = async (agentId, targetBooking) => {
+  const slot = parseSlot(targetBooking.preferred_time);
+  if (!slot) return null;                       // no parseable time → can't enforce
+  if (!targetBooking.preferred_date) return null;
+  const date = String(targetBooking.preferred_date).split('T')[0];
+
+  // Pull this rep's other live bookings on the same day.
+  const others = await Booking.findAll({
+    where: {
+      agent_id: agentId,
+      preferred_date: date,
+      id: { [Op.ne]: targetBooking.id },
+      status: { [Op.notIn]: ['cancelled', 'rejected', 'completed'] },
+    },
+    attributes: ['id', 'preferred_time', 'customer_name', 'booking_number'],
+  });
+
+  for (const other of others) {
+    const otherSlot = parseSlot(other.preferred_time);
+    if (!otherSlot) continue;
+    // Buffered ranges: pad each slot with BUFFER_MIN on both sides, then
+    // check overlap. If padded ranges intersect → conflict.
+    const aStart = slot[0] - BUFFER_MIN;
+    const aEnd   = slot[1] + BUFFER_MIN;
+    const bStart = otherSlot[0];
+    const bEnd   = otherSlot[1];
+    const overlap = aStart < bEnd && bStart < aEnd;
+    if (overlap) {
+      const fmt = (m) => {
+        const h = Math.floor(m / 60).toString().padStart(2, '0');
+        const mm = (m % 60).toString().padStart(2, '0');
+        return `${h}:${mm}`;
+      };
+      return (
+        `Representative already has a booking ${fmt(otherSlot[0])}–${fmt(otherSlot[1])} ` +
+        `on ${date} (booking #${other.booking_number || String(other.id).slice(0, 6)}). ` +
+        `A 30-minute travel buffer is required between assignments — pick a different rep ` +
+        `or reschedule one of the bookings.`
+      );
+    }
+  }
+  return null;
+};
 
 // Service Management
 const getAllServices = async (req, res) => {
@@ -318,6 +400,15 @@ const assignAgent = async (req, res) => {
         success: false,
         message: 'Representative not found or not active'
       });
+    }
+
+    // Enforce the 30-min travel buffer (spec: Booking Window §2). If
+    // the chosen rep already has an adjacent booking on the same day,
+    // refuse the assignment with a clear message — the admin then picks
+    // a different rep or reschedules one of the conflicting jobs.
+    const bufferError = await checkBufferConflict(agentId, booking);
+    if (bufferError) {
+      return res.status(409).json({ success: false, message: bufferError });
     }
 
     await booking.update({
