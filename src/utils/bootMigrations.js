@@ -119,6 +119,27 @@ const MIGRATIONS = [
     label: 'vault_documents.last_alert_sent_at',
     sql: 'ALTER TABLE vault_documents ADD COLUMN last_alert_sent_at DATETIME NULL',
   },
+  // Compliance register fields — customer-owned tracker per the new
+  // mockup. document_name lets users register any renewable doc (not
+  // just the predefined compliance_type enum), issuing_authority is the
+  // statutory dept / concerned office, document_number is the reference
+  // number on the doc, issue_date is when the doc was originally issued.
+  {
+    label: 'vault_documents.document_name',
+    sql: 'ALTER TABLE vault_documents ADD COLUMN document_name VARCHAR(255) NULL',
+  },
+  {
+    label: 'vault_documents.issuing_authority',
+    sql: 'ALTER TABLE vault_documents ADD COLUMN issuing_authority VARCHAR(255) NULL',
+  },
+  {
+    label: 'vault_documents.document_number',
+    sql: 'ALTER TABLE vault_documents ADD COLUMN document_number VARCHAR(100) NULL',
+  },
+  {
+    label: 'vault_documents.issue_date',
+    sql: 'ALTER TABLE vault_documents ADD COLUMN issue_date DATE NULL',
+  },
 ];
 
 // Probe a table once for its current column list — much faster than

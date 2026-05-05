@@ -89,6 +89,38 @@ const VaultDocument = sequelize.define('VaultDocument', {
     allowNull: true,
   },
 
+  // ─── Register fields (customer-owned compliance tracker) ────────────────
+  // Free-text label so the customer can register any renewable doc, not
+  // just the predefined enum (e.g. "Bike Insurance", "Flat Rent Agreement",
+  // "Shop Lease Deed"). When set, the row shows up in the user's personal
+  // register screen. compliance_type may still be NULL — that's fine.
+  document_name: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+  },
+
+  // Issuing authority / concerned office. Government dept ("RTO Goa",
+  // "Pollution Dept (Govt. of Goa)") or private party for private docs
+  // ("Ashok Kumar" for a flat rent agreement, "New India" for insurance).
+  issuing_authority: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+  },
+
+  // The document's reference number on its face — e.g. registration number,
+  // license number, policy number. Free-text because formats vary widely.
+  document_number: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+  },
+
+  // Date the document was originally issued. Surfaced in the register but
+  // doesn't drive any alert logic — that's all expiry-based.
+  issue_date: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+  },
+
   // Date the document expires. The 90/60/30-day alert cron uses this column.
   // NULL when not a compliance doc (regular vault uploads).
   expiry_date: {

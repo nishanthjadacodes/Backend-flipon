@@ -55,26 +55,24 @@ const computeStatus = (expiryDate) => {
   return { status, daysLeft };
 };
 
-// GET /api/compliance — current user's compliance docs, ordered by urgency.
+// GET /api/compliance — current user's register entries, sorted by expiry.
+//
+// Personal compliance register: any user can have rows here, even if they
+// haven't filled a company profile. We surface a row whenever it has either
+// a `compliance_type` (enum, legacy/B2B path) OR a `document_name`
+// (free-text, new register path). That way the new tracker shows alongside
+// any existing B2B compliance docs without breaking either flow.
 export const listCompliance = async (req, res) => {
   try {
-    // Find the user's company profile (required to scope vault docs).
-    const profile = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
-
-    if (!profile) {
-      return res.json({
-        success: true,
-        data: [],
-        message: 'No company profile yet — fill it before uploading compliance docs.',
-        needsCompanyProfile: true,
-      });
-    }
-
+    const Op = sequelize.Sequelize.Op;
     const docs = await VaultDocument.findAll({
       where: {
         customer_id: req.user.id,
-        company_profile_id: profile.id,
-        compliance_type: { [sequelize.Sequelize.Op.ne]: null },
+        // Either an enum-typed compliance doc OR a free-text register entry.
+        [Op.or]: [
+          { compliance_type: { [Op.ne]: null } },
+          { document_name: { [Op.ne]: null } },
+        ],
       },
       order: [['expiry_date', 'ASC']],
     });
@@ -82,6 +80,12 @@ export const listCompliance = async (req, res) => {
     const enriched = docs.map((d) => {
       const j = d.toJSON();
       const { status, daysLeft } = computeStatus(j.expiry_date);
+      // Display name preference: explicit free-text > enum label > "—".
+      const displayName =
+        j.document_name ||
+        COMPLIANCE_LABELS[j.compliance_type] ||
+        j.compliance_type ||
+        'Document';
       return {
         ...j,
         // Don't leak server-internal storage details to the client.
@@ -92,7 +96,7 @@ export const listCompliance = async (req, res) => {
         // Derived fields the UI uses directly.
         status,
         daysLeft,
-        label: COMPLIANCE_LABELS[j.compliance_type] || j.compliance_type,
+        label: displayName,
         downloadUrl: `${getFileUrl('', 'vault', req).replace(/\/$/, '')}/${j.id}/download`,
       };
     });
@@ -128,11 +132,29 @@ export const uploadCompliance = [
       if (!req.file) {
         return res.status(400).json({ success: false, message: 'No file uploaded' });
       }
-      const { compliance_type, expiry_date, note, customer_id: bodyCustomerId } = req.body;
-      if (!compliance_type) {
-        return res.status(400).json({ success: false, message: 'compliance_type is required' });
+      const {
+        compliance_type,
+        document_name,
+        issuing_authority,
+        document_number,
+        issue_date,
+        expiry_date,
+        note,
+        customer_id: bodyCustomerId,
+      } = req.body;
+
+      // Either compliance_type (enum / B2B path) or document_name (free-text
+      // register path) must identify what this document is. Both can be set
+      // at once if the user picks an enum item AND types a custom label.
+      if (!compliance_type && !(document_name && document_name.trim())) {
+        try { fs.unlinkSync(req.file.path); } catch (_) {}
+        return res.status(400).json({
+          success: false,
+          message: 'Either compliance_type or document_name is required.',
+        });
       }
       if (!expiry_date) {
+        try { fs.unlinkSync(req.file.path); } catch (_) {}
         return res.status(400).json({ success: false, message: 'expiry_date is required' });
       }
 
@@ -152,16 +174,19 @@ export const uploadCompliance = [
       const targetCustomerId =
         isStaff && bodyCustomerId ? bodyCustomerId : req.user.id;
 
-      const profile = await CompanyProfile.findOne({ where: { user_id: targetCustomerId } });
-      if (!profile) {
-        // Clean up the orphan file if profile is missing.
-        try { fs.unlinkSync(req.file.path); } catch (_) {}
-        return res.status(400).json({
-          success: false,
-          message: isStaff && bodyCustomerId
-            ? "This customer hasn't filled their company profile yet — they need to do that before you can upload compliance docs on their behalf."
-            : 'Fill your company profile before uploading compliance documents.',
+      // Personal register entries don't require a company profile — that
+      // gate only applies to legacy enum-typed B2B compliance docs that
+      // need an associated company. For free-text register entries we
+      // happily save with company_profile_id = NULL.
+      let companyProfileId = null;
+      if (compliance_type) {
+        const profile = await CompanyProfile.findOne({
+          where: { user_id: targetCustomerId },
         });
+        if (profile) companyProfileId = profile.id;
+        // No hard error if missing — the row still saves as a personal
+        // register entry. Customer can attach a company profile later
+        // and migration logic will pick it up.
       }
 
       const fakeIv = crypto.randomBytes(6).toString('hex');
@@ -169,7 +194,7 @@ export const uploadCompliance = [
 
       const doc = await VaultDocument.create({
         enquiry_id: null,
-        company_profile_id: profile.id,
+        company_profile_id: companyProfileId,
         customer_id: targetCustomerId,
         // uploaded_by always tracks who actually pressed Upload (audit trail).
         // For rep uploads this is the rep's id, not the customer's.
@@ -189,7 +214,12 @@ export const uploadCompliance = [
         tier: 'standard',
         visible_to_customer: true,
         note: note || null,
-        compliance_type,
+        // Either / both can be set. Register-only entries leave compliance_type NULL.
+        compliance_type: compliance_type || null,
+        document_name: (document_name && document_name.trim()) || null,
+        issuing_authority: (issuing_authority && issuing_authority.trim()) || null,
+        document_number: (document_number && document_number.trim()) || null,
+        issue_date: issue_date || null,
         expiry_date,
       });
 
@@ -205,7 +235,11 @@ export const uploadCompliance = [
           auth_tag: undefined,
           status,
           daysLeft,
-          label: COMPLIANCE_LABELS[j.compliance_type] || j.compliance_type,
+          label:
+            j.document_name ||
+            COMPLIANCE_LABELS[j.compliance_type] ||
+            j.compliance_type ||
+            'Document',
         },
       });
     } catch (e) {
@@ -214,6 +248,91 @@ export const uploadCompliance = [
     }
   },
 ];
+
+// PATCH /api/compliance/:id — inline edit of a register row. Lets the
+// customer tap any cell in the spreadsheet (Document Name, Issuing
+// Authority, Document No, Issue Date, Valid Upto, Note) and save just
+// that change without re-uploading the file. compliance_type can also
+// be updated if the user wants to upgrade a register row to a tracked
+// enum type later.
+export const updateCompliance = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const doc = await VaultDocument.findByPk(id);
+    if (!doc || doc.customer_id !== req.user.id) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    const allowedFields = [
+      'document_name',
+      'issuing_authority',
+      'document_number',
+      'issue_date',
+      'expiry_date',
+      'note',
+      'compliance_type',
+    ];
+
+    const updates = {};
+    for (const key of allowedFields) {
+      if (key in req.body) {
+        const v = req.body[key];
+        // Empty string → NULL so the cell goes back to "—" instead of
+        // showing a blank string. Date fields strip to null on '' too.
+        updates[key] = v === '' || v === null ? null : v;
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ success: false, message: 'No fields to update' });
+    }
+
+    await doc.update(updates);
+
+    const j = doc.toJSON();
+    const { status, daysLeft } = computeStatus(j.expiry_date);
+
+    res.json({
+      success: true,
+      data: {
+        ...j,
+        stored_name: undefined,
+        iv: undefined,
+        auth_tag: undefined,
+        status,
+        daysLeft,
+        label:
+          j.document_name ||
+          COMPLIANCE_LABELS[j.compliance_type] ||
+          j.compliance_type ||
+          'Document',
+      },
+    });
+  } catch (e) {
+    console.error('updateCompliance error:', e);
+    res.status(500).json({ success: false, message: 'Failed to update document' });
+  }
+};
+
+// DELETE /api/compliance/:id — remove a register row. Only the owning
+// customer can delete; staff can't accidentally wipe a customer's row.
+// File on disk / Cloudinary blob is left in place (cheap to keep around;
+// removing it would require a separate Cloudinary destroy call and the
+// risk of orphaning vs. accidentally wiping live data isn't worth it).
+export const deleteCompliance = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const doc = await VaultDocument.findByPk(id);
+    if (!doc || doc.customer_id !== req.user.id) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+    await doc.destroy();
+    res.json({ success: true });
+  } catch (e) {
+    console.error('deleteCompliance error:', e);
+    res.status(500).json({ success: false, message: 'Failed to delete document' });
+  }
+};
 
 // POST /api/compliance/:id/renew — convert a compliance doc into an Enquiry
 // pre-filled with the doc type. Goes into the B2B Pipeline as a renewal lead.
