@@ -39,6 +39,26 @@ const MIGRATIONS = [
     label: 'bookings.referral_discount',
     sql: 'ALTER TABLE bookings ADD COLUMN referral_discount DECIMAL(10,2) NULL DEFAULT 0',
   },
+  // Razorpay payment trail — without these the verifyPayment controller
+  // silently drops the transaction id / amount / paid timestamp because
+  // Sequelize ignores fields not declared on the model AND the columns
+  // never existed in the DB. Result: paid bookings looked unpaid in admin.
+  {
+    label: 'bookings.payment_method',
+    sql: 'ALTER TABLE bookings ADD COLUMN payment_method VARCHAR(32) NULL',
+  },
+  {
+    label: 'bookings.transaction_id',
+    sql: 'ALTER TABLE bookings ADD COLUMN transaction_id VARCHAR(64) NULL',
+  },
+  {
+    label: 'bookings.amount_paid',
+    sql: 'ALTER TABLE bookings ADD COLUMN amount_paid DECIMAL(10,2) NULL',
+  },
+  {
+    label: 'bookings.paid_at',
+    sql: 'ALTER TABLE bookings ADD COLUMN paid_at DATETIME NULL',
+  },
   // B2B / Industrial enquiry quote fields. Without these the
   // "Send Quote to Customer" button in the admin dashboard fails
   // silently because enquiry.update({...quote fields}) → Unknown column.

@@ -148,6 +148,25 @@ const Booking = sequelize.define('Booking', {
     type: DataTypes.ENUM('pending', 'paid', 'refunded'),
     defaultValue: 'pending'
   },
+  // Razorpay / online-payment trail. Populated by paymentController.verifyPayment
+  // after the gateway confirms `captured`. Without these, the booking would
+  // show "paid" with no transaction reference — useless for finance reconciliation.
+  payment_method: {
+    type: DataTypes.STRING(32),
+    allowNull: true,
+  },
+  transaction_id: {
+    type: DataTypes.STRING(64),
+    allowNull: true,
+  },
+  amount_paid: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+  },
+  paid_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
   notes: {
     type: DataTypes.TEXT,
     allowNull: true
