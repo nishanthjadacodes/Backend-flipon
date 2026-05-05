@@ -460,21 +460,19 @@ const backfillMissedReferralRewards = async (req, res) => {
 // ─── Team Tree + Income Summary ─────────────────────────────────────────
 // Per-downline breakdown for the "Team Tree View & Income Summary" screen.
 // For each direct referee we list every completed booking they delivered
-// this month, plus the rep's projected royalty share on that booking.
+// this month.
 //
 // Each row in the table represents one of the downline's completed bookings:
 //   gross  = booking price (what the customer paid)
 //   level  = referral depth from the requesting rep (1 = direct, 2 = indirect)
-//   net    = the rep's share = 2% of gross (royalty rate)
-//   tds    = 10% of net (TDS withholding shown for transparency; not actually
-//            deducted on payout — finance team handles withholding off-ledger)
+//   tds    = flat ₹10 per booking (fixed slab; capped at gross for tiny bookings)
+//   net    = gross - tds (what the rep effectively earns from the booking)
 //   desc   = "Team Referral Income of Level <n> by <referee-id>"
 //
 // Totals across all rows surface as: Income (sum of net), TDS (sum of tds),
 // and a wallet-card "Total" that's just the same Income figure rendered
 // prominently.
-const ROYALTY_RATE = 0.02;
-const TDS_RATE = 0.10;
+const TDS_FLAT = 10;
 
 const getTeamIncomeSummary = async (req, res) => {
   try {
@@ -532,8 +530,10 @@ const getTeamIncomeSummary = async (req, res) => {
 
       const rows = list.map((b, idx) => {
         const gross = parseFloat(b.price_quoted || 0);
-        const net = Math.round(gross * ROYALTY_RATE * 100) / 100;
-        const tds = Math.round(net * TDS_RATE * 100) / 100;
+        // Flat TDS per booking. Capped at gross so a small booking
+        // (< ₹10) never produces a negative net. Net = Gross - TDS.
+        const tds = Math.min(TDS_FLAT, gross);
+        const net = Math.round((gross - tds) * 100) / 100;
         totalGross += gross;
         totalNet += net;
         totalTds += tds;
