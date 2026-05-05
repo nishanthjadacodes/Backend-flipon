@@ -457,6 +457,135 @@ const backfillMissedReferralRewards = async (req, res) => {
   }
 };
 
+// ─── Team Tree + Income Summary ─────────────────────────────────────────
+// Per-downline breakdown for the "Team Tree View & Income Summary" screen.
+// For each direct referee we list every completed booking they delivered
+// this month, plus the rep's projected royalty share on that booking.
+//
+// Each row in the table represents one of the downline's completed bookings:
+//   gross  = booking price (what the customer paid)
+//   level  = referral depth from the requesting rep (1 = direct, 2 = indirect)
+//   net    = the rep's share = 2% of gross (royalty rate)
+//   tds    = 10% of net (TDS withholding shown for transparency; not actually
+//            deducted on payout — finance team handles withholding off-ledger)
+//   desc   = "Team Referral Income of Level <n> by <referee-id>"
+//
+// Totals across all rows surface as: Income (sum of net), TDS (sum of tds),
+// and a wallet-card "Total" that's just the same Income figure rendered
+// prominently.
+const ROYALTY_RATE = 0.02;
+const TDS_RATE = 0.10;
+
+const getTeamIncomeSummary = async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    // Direct (level-1) referees
+    const referrals = await Referral.findAll({
+      where: { referrer_id: req.user.id },
+      include: [{ model: User, as: 'referee', attributes: ['id', 'name', 'mobile', 'created_at'] }],
+    });
+
+    if (referrals.length === 0) {
+      return res.json({
+        success: true,
+        totals: { gross: 0, tds: 0, net: 0, downlineCount: 0 },
+        downlines: [],
+      });
+    }
+
+    // Window: current calendar month
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+
+    const refereeIds = referrals.filter(r => r.referee_id).map(r => r.referee_id);
+
+    // Pull this month's completed bookings for every direct downline.
+    const bookings = await Booking.findAll({
+      where: {
+        agent_id: { [Op.in]: refereeIds },
+        status: 'completed',
+        completed_at: { [Op.gte]: monthStart },
+      },
+      attributes: ['id', 'agent_id', 'price_quoted', 'completed_at', 'service_id'],
+      order: [['completed_at', 'ASC']],
+    });
+
+    // Index by downline so we can render one card per agent
+    const byAgent = {};
+    for (const b of bookings) {
+      const aid = b.agent_id;
+      if (!byAgent[aid]) byAgent[aid] = [];
+      byAgent[aid].push(b);
+    }
+
+    let totalGross = 0;
+    let totalNet = 0;
+    let totalTds = 0;
+
+    const downlines = referrals.map((r) => {
+      const refereeId = r.referee_id;
+      const ref = r.referee;
+      const list = byAgent[refereeId] || [];
+
+      const rows = list.map((b, idx) => {
+        const gross = parseFloat(b.price_quoted || 0);
+        const net = Math.round(gross * ROYALTY_RATE * 100) / 100;
+        const tds = Math.round(net * TDS_RATE * 100) / 100;
+        totalGross += gross;
+        totalNet += net;
+        totalTds += tds;
+        const shortRefId = String(refereeId || '').slice(0, 8);
+        return {
+          index: idx + 1,
+          date: b.completed_at,
+          level: 1,
+          gross,
+          tds,
+          net,
+          desc: `Team Referral Income of Level 1 by ${shortRefId}`,
+          bookingId: b.id,
+        };
+      });
+
+      const subtotal = rows.reduce(
+        (acc, x) => ({ gross: acc.gross + x.gross, tds: acc.tds + x.tds, net: acc.net + x.net }),
+        { gross: 0, tds: 0, net: 0 },
+      );
+
+      return {
+        refereeId,
+        name: ref?.name || 'Pending Signup',
+        mobile: ref?.mobile || '',
+        doj: ref?.created_at || r.created_at,
+        rows,
+        totals: {
+          gross: Math.round(subtotal.gross * 100) / 100,
+          tds: Math.round(subtotal.tds * 100) / 100,
+          net: Math.round(subtotal.net * 100) / 100,
+          rowCount: rows.length,
+        },
+      };
+    });
+
+    res.json({
+      success: true,
+      totals: {
+        gross: Math.round(totalGross * 100) / 100,
+        tds: Math.round(totalTds * 100) / 100,
+        net: Math.round(totalNet * 100) / 100,
+        downlineCount: downlines.filter(d => d.totals.rowCount > 0).length,
+      },
+      downlines,
+    });
+  } catch (error) {
+    console.error('Team income summary error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch team income summary' });
+  }
+};
+
 export {
   generateReferralCode,
   getReferralData,
@@ -464,4 +593,5 @@ export {
   getReferralStats,
   applyReferralCode,
   backfillMissedReferralRewards,
+  getTeamIncomeSummary,
 };
