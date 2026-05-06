@@ -18,7 +18,7 @@ import {
   User,
   sequelize,
 } from '../models/index.js';
-import { uploadSingle, getFileUrl, getStoredFileValue } from '../middleware/upload.js';
+import { uploadSingle, getStoredFileValue } from '../middleware/upload.js';
 import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -77,6 +77,29 @@ export const listCompliance = async (req, res) => {
       order: [['expiry_date', 'ASC']],
     });
 
+    // Build the API base URL once so every doc's download URL is an
+    // absolute http(s) URL. Previously this was using `getFileUrl('', ...)`
+    // which returns '' for empty fileName, so the download URL collapsed
+    // to a relative `/<uuid>/download` that Expo FileSystem rejected.
+    const apiBase = (() => {
+      let baseUrl = process.env.BASE_URL;
+      if (!baseUrl && process.env.RENDER_EXTERNAL_URL) {
+        baseUrl = process.env.RENDER_EXTERNAL_URL;
+      }
+      if (!baseUrl && process.env.RENDER_EXTERNAL_HOSTNAME) {
+        baseUrl = `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`;
+      }
+      if (!baseUrl && req?.headers) {
+        const host = req.headers['x-forwarded-host'] || req.headers.host;
+        const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+        if (host) baseUrl = `${proto}://${host}`;
+      }
+      if (!baseUrl) {
+        baseUrl = `http://localhost:${process.env.PORT || 3001}`;
+      }
+      return baseUrl.replace(/\/$/, '');
+    })();
+
     const enriched = docs.map((d) => {
       const j = d.toJSON();
       const { status, daysLeft } = computeStatus(j.expiry_date);
@@ -97,7 +120,7 @@ export const listCompliance = async (req, res) => {
         status,
         daysLeft,
         label: displayName,
-        downloadUrl: `${getFileUrl('', 'vault', req).replace(/\/$/, '')}/${j.id}/download`,
+        downloadUrl: `${apiBase}/api/compliance/${j.id}/download`,
       };
     });
 
