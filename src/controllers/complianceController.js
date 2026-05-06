@@ -266,8 +266,24 @@ export const uploadCompliance = [
         },
       });
     } catch (e) {
+      // Surface the actual reason in the 500 body so the device sees
+      // what's wrong (boot migration didn't run, missing column, NOT NULL
+      // violation, etc) instead of a generic 'failed' toast. Sequelize
+      // errors expose `.original` (db driver) with a descriptive `.code`
+      // and `.sqlMessage` — we prefer those over the generic `.message`.
       console.error('uploadCompliance error:', e);
-      res.status(500).json({ success: false, message: 'Failed to upload compliance document' });
+      const sqlMsg = e?.original?.sqlMessage || e?.parent?.sqlMessage;
+      const sqlCode = e?.original?.code || e?.parent?.code;
+      const reason =
+        sqlMsg
+          ? `${sqlMsg}${sqlCode ? ` [${sqlCode}]` : ''}`
+          : (e?.errors && Array.isArray(e.errors) && e.errors[0]?.message)
+            ? e.errors[0].message
+            : (e?.message || 'unknown');
+      res.status(500).json({
+        success: false,
+        message: `Failed to upload: ${reason}`,
+      });
     }
   },
 ];
