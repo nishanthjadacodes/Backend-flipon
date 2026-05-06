@@ -206,11 +206,15 @@ export const runBootMigrations = async () => {
     pending.push(m);
   }
 
-  if (pending.length === 0) {
-    return;                                    // nothing to do, silent
+  // NOTE: previously this function returned early when `pending.length === 0`.
+  // That worked for ADD COLUMN-only migrations but silently SKIPPED the
+  // RELAXATIONS step in step 3 — meaning any MODIFY COLUMN added to the
+  // RELAXATIONS list AFTER the columns were first added would never run
+  // because the function always exited at this guard. We now always
+  // proceed; step 2 just becomes a no-op when there are no pending adds.
+  if (pending.length > 0) {
+    console.log(`[boot-migrate] applying ${pending.length} pending migration(s)…`);
   }
-
-  console.log(`[boot-migrate] applying ${pending.length} pending migration(s)…`);
 
   // Step 2: combine multiple ADD COLUMNs per table into one ALTER
   // statement. MySQL/TiDB lets you stack them with commas.
