@@ -35,6 +35,13 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING(100),
     allowNull: true
   },
+  // Avatar / profile picture URL. Either a Cloudinary URL (production) or
+  // a relative /uploads/avatars/<file> path (local fallback). Customers
+  // and reps both use this field — the column is on the shared User model.
+  profile_pic: {
+    type: DataTypes.STRING(512),
+    allowNull: true,
+  },
   role: {
     type: DataTypes.ENUM(
       'super_admin',

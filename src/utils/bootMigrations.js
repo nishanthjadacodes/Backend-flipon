@@ -27,6 +27,14 @@ const MIGRATIONS = [
     label: 'users.is_priority_user',
     sql: 'ALTER TABLE users ADD COLUMN is_priority_user TINYINT(1) NOT NULL DEFAULT 0',
   },
+  // Profile picture URL — Cloudinary URL in production, relative
+  // /uploads/avatars/<filename> path on local. Customer + rep apps
+  // both display this in the profile screen with a camera overlay
+  // button to update it.
+  {
+    label: 'users.profile_pic',
+    sql: 'ALTER TABLE users ADD COLUMN profile_pic VARCHAR(512) NULL',
+  },
   {
     label: 'users.royalty_forfeited_until',
     sql: 'ALTER TABLE users ADD COLUMN royalty_forfeited_until DATETIME NULL',

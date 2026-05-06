@@ -1,4 +1,5 @@
 import { User } from '../models/index.js';
+import { uploadSingle, getStoredFileValue } from '../middleware/upload.js';
 
 // Get agent profile
 const getAgentProfile = async (req, res) => {
@@ -20,6 +21,8 @@ const getAgentProfile = async (req, res) => {
         id: user.id,
         mobile: user.mobile,
         name: user.name,
+        email: user.email,
+        profile_pic: user.profile_pic,
         role: user.role,
         is_verified: user.is_verified,
         is_active: user.is_active,
@@ -128,8 +131,44 @@ const updateAgentProfile = async (req, res) => {
   }
 };
 
+// POST /api/profile/avatar  (multipart, "file" field)
+//
+// Uploads a profile picture for the authenticated user. Stores the URL
+// (Cloudinary in prod, /uploads/<filename> on local) on User.profile_pic
+// and returns the new URL so the client can update its UI immediately.
+//
+// Reuses the global `uploadSingle` middleware so size limits + Cloudinary
+// integration are consistent with the rest of the upload flows. Same
+// endpoint serves customer + rep apps — User.role decides which UI shows
+// the avatar where.
+const uploadAvatar = [
+  uploadSingle,
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'No file uploaded' });
+      }
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+      const url = getStoredFileValue(req.file);
+      await user.update({ profile_pic: url });
+      res.json({
+        success: true,
+        message: 'Profile picture updated',
+        profile_pic: url,
+      });
+    } catch (e) {
+      console.error('uploadAvatar error:', e);
+      res.status(500).json({ success: false, message: 'Failed to upload avatar' });
+    }
+  },
+];
+
 export {
   getAgentProfile,
   updateAgentOnlineStatus,
-  updateAgentProfile
+  updateAgentProfile,
+  uploadAvatar,
 };

@@ -2,7 +2,8 @@ import express from 'express';
 import {
   getAgentProfile,
   updateAgentOnlineStatus,
-  updateAgentProfile
+  updateAgentProfile,
+  uploadAvatar,
 } from '../controllers/profileController.js';
 import auth from '../middleware/auth.js';
 
@@ -16,5 +17,8 @@ router.put('/online-status', auth, updateAgentOnlineStatus);
 
 // Update agent profile
 router.put('/', auth, updateAgentProfile);
+
+// Upload / replace profile picture (multipart, "file" field)
+router.post('/avatar', auth, ...uploadAvatar);
 
 export default router;
