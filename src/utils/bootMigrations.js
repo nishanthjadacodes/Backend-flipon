@@ -274,4 +274,14 @@ const RELAXATIONS = [
     label: 'vault_documents.company_profile_id → NULL',
     sql: 'ALTER TABLE vault_documents MODIFY COLUMN company_profile_id CHAR(36) NULL',
   },
+  // Cloudinary secure URLs run 200-300 chars routinely (full domain +
+  // versioned path + UUID-like filename). The original VARCHAR(128) cap
+  // was big enough for the local-disk basename fallback but too small
+  // for the production Cloudinary URLs — uploads were failing with
+  // "Data too long for column 'stored_name' [ER_DATA_TOO_LONG]". 512
+  // covers any URL we realistically see.
+  {
+    label: 'vault_documents.stored_name → VARCHAR(512)',
+    sql: 'ALTER TABLE vault_documents MODIFY COLUMN stored_name VARCHAR(512) NOT NULL',
+  },
 ];

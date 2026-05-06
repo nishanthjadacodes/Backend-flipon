@@ -41,8 +41,12 @@ const VaultDocument = sequelize.define('VaultDocument', {
   // Original filename as shown to the user (e.g. "Factory_Licence_2026.pdf")
   original_name: { type: DataTypes.STRING(255), allowNull: false },
 
-  // Randomised on-disk filename (opaque). Never exposed to the client.
-  stored_name: { type: DataTypes.STRING(128), allowNull: false },
+  // Either a Cloudinary secure_url (production) or a randomised on-disk
+  // basename (local fallback). Cloudinary URLs run 200-300 chars
+  // routinely, so STRING(128) was too small — uploads via Cloudinary
+  // crashed with ER_DATA_TOO_LONG. 512 is comfortable headroom for
+  // every real-world URL we'll see.
+  stored_name: { type: DataTypes.STRING(512), allowNull: false },
 
   mime_type: { type: DataTypes.STRING(120), allowNull: false },
 
