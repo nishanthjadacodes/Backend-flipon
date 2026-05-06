@@ -26,7 +26,11 @@ const VaultDocument = sequelize.define('VaultDocument', {
   // or a company_profile (e.g. annual retainer docs not tied to a specific
   // enquiry).
   enquiry_id:         { type: DataTypes.UUID, allowNull: true },
-  company_profile_id: { type: DataTypes.UUID, allowNull: false },
+  // Was NOT NULL — relaxed to allow personal compliance-register rows
+  // that aren't tied to a B2B company profile (e.g. a customer logging
+  // their car registration / bike insurance / flat rent agreement).
+  // Legacy B2B uploads still set this; the new register flow saves NULL.
+  company_profile_id: { type: DataTypes.UUID, allowNull: true },
   customer_id:        { type: DataTypes.UUID, allowNull: false }, // denormalised for fast scoping
 
   // Uploader metadata — who on the admin side put this here. For customer

@@ -246,4 +246,32 @@ export const runBootMigrations = async () => {
   if (added > 0) {
     console.log(`[boot-migrate] applied ${added} new column(s)`);
   }
+
+  // ─── Step 3: schema relaxations ────────────────────────────────────────
+  // MODIFY COLUMN statements that drop NOT NULL / change a default. These
+  // are idempotent — running on an already-relaxed column is a no-op
+  // (TiDB silently accepts), so we don't need a probe step. We just try
+  // each one and log the result.
+  for (const r of RELAXATIONS) {
+    try {
+      await sequelize.query(r.sql);
+      console.log(`[boot-migrate] ✅ ${r.label} — relaxed`);
+    } catch (e) {
+      console.error(`[boot-migrate] ❌ ${r.label}:`, e?.message);
+    }
+  }
 };
+
+// MODIFY COLUMN statements applied unconditionally on every boot.
+// Add entries here when you need to drop a NOT NULL or change a column
+// type — they're idempotent so re-running causes no harm.
+const RELAXATIONS = [
+  // Compliance Register — personal-tracker rows aren't tied to a B2B
+  // company profile, so company_profile_id has to allow NULL. Without
+  // this relaxation, the customer's "Add row" upload fails with
+  // "Column 'company_profile_id' cannot be null".
+  {
+    label: 'vault_documents.company_profile_id → NULL',
+    sql: 'ALTER TABLE vault_documents MODIFY COLUMN company_profile_id CHAR(36) NULL',
+  },
+];

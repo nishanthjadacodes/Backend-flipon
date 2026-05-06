@@ -79,9 +79,17 @@ const runOnce = async () => {
     const now = new Date();
     const horizon = new Date(now.getTime() + 91 * ONE_DAY_MS); // anything expiring in <=91 days
 
+    // Pull every doc with an expiry coming up — both legacy enum-typed
+    // compliance docs (`compliance_type IS NOT NULL`) and the new
+    // personal-register rows (`document_name IS NOT NULL`). Without the
+    // OR clause, register-only rows would never trigger smart-alert
+    // notifications even though they have an expiry_date set.
     const docs = await VaultDocument.findAll({
       where: {
-        compliance_type: { [Op.ne]: null },
+        [Op.or]: [
+          { compliance_type: { [Op.ne]: null } },
+          { document_name: { [Op.ne]: null } },
+        ],
         expiry_date: {
           [Op.gte]: now,
           [Op.lte]: horizon,
