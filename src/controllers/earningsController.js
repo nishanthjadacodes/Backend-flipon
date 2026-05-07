@@ -37,6 +37,14 @@ const getAgentEarnings = async (req, res) => {
       Number(b.price_quoted || b.service?.user_cost || 0);
 
     // Each row represents one completed booking the rep earned commission on.
+    // Date preference order:
+    //   1. completed_at (the moment the rep / customer closed the job)
+    //   2. submitted_at (rep marked work-done but customer hasn't OTP'd yet —
+    //      treat as "earned today" since the work was done today)
+    //   3. updated_at (last DB write — usually around completion time)
+    //   4. created_at (oldest fallback, only used when none of the above exist)
+    // This way historic bookings without completed_at still bucket sensibly
+    // until the new /job-status fix fully populates the column going forward.
     const earnings = completedBookings.map((b) => ({
       id: b.id,
       taskId: String(b.id || '').substring(0, 8),
@@ -44,7 +52,7 @@ const getAgentEarnings = async (req, res) => {
       serviceName: b.service?.name || 'Service',
       amount: totalAmountFor(b),         // gross booking value
       commission: commissionFor(b),      // rep's actual earning
-      date: b.completed_at || b.updated_at || b.created_at,
+      date: b.completed_at || b.submitted_at || b.updated_at || b.created_at,
       status: 'completed',
       paymentStatus: b.payment_status || 'paid',
     }));

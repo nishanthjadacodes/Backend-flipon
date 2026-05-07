@@ -744,6 +744,16 @@ const updateJobStatus = async (req, res) => {
       updates.documents_collected_at = new Date();
     }
 
+    // Stamp `completed_at` when this update flips the booking to complete.
+    // Without this, today's earnings filter (which keys on completed_at)
+    // never picks up newly-completed bookings and the rep's "Today's
+    // Earnings" tile stays at ₹0 even after they finish a job. Mirrors
+    // the same stamp /verify-completion already writes for OTP-closed
+    // bookings — keeps both completion paths consistent.
+    if (mapping.dbStatus === 'completed' && !booking.completed_at) {
+      updates.completed_at = new Date();
+    }
+
     // When the rep finishes the work (work_completed/submitted/completed),
     // generate the completion OTP. The customer reads this OTP off their
     // app/SMS and tells it to the rep, who enters it to close the booking.
