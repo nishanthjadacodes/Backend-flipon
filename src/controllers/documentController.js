@@ -341,10 +341,21 @@ const verifyDocument = async (req, res) => {
       message: `Document ${approved ? 'approved' : 'rejected'} successfully`
     });
   } catch (error) {
+    // Surface the actual reason in the 500 body so the admin UI shows
+    // what's wrong (missing column, NOT NULL violation, FK issue, etc.)
+    // instead of a generic "Failed to verify document" toast.
     console.error('Error verifying document:', error);
+    const sqlMsg = error?.original?.sqlMessage || error?.parent?.sqlMessage;
+    const sqlCode = error?.original?.code || error?.parent?.code;
+    const reason =
+      sqlMsg
+        ? `${sqlMsg}${sqlCode ? ` [${sqlCode}]` : ''}`
+        : (error?.errors && Array.isArray(error.errors) && error.errors[0]?.message)
+          ? error.errors[0].message
+          : (error?.message || 'unknown');
     res.status(500).json({
       success: false,
-      message: 'Failed to verify document'
+      message: `Failed to verify document: ${reason}`,
     });
   }
 };
