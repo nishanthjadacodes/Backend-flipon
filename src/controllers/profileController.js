@@ -166,9 +166,38 @@ const uploadAvatar = [
   },
 ];
 
+// DELETE /api/profile/avatar
+//
+// Clears the user's profile picture (sets `profile_pic` to NULL) so
+// the customer / rep app falls back to the first-letter initial on
+// the avatar. Doesn't actually delete the underlying Cloudinary blob
+// (cheap to keep around; deleting it would risk orphaning if the same
+// URL is referenced from caches). Idempotent — calling on an already-
+// cleared profile is a no-op success.
+const deleteAvatar = async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    if (user.profile_pic) {
+      await user.update({ profile_pic: null });
+    }
+    res.json({
+      success: true,
+      message: 'Profile picture removed',
+      profile_pic: null,
+    });
+  } catch (e) {
+    console.error('deleteAvatar error:', e);
+    res.status(500).json({ success: false, message: 'Failed to remove avatar' });
+  }
+};
+
 export {
   getAgentProfile,
   updateAgentOnlineStatus,
   updateAgentProfile,
   uploadAvatar,
+  deleteAvatar,
 };

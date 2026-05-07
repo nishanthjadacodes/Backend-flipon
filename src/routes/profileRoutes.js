@@ -4,6 +4,7 @@ import {
   updateAgentOnlineStatus,
   updateAgentProfile,
   uploadAvatar,
+  deleteAvatar,
 } from '../controllers/profileController.js';
 import auth from '../middleware/auth.js';
 
@@ -20,5 +21,8 @@ router.put('/', auth, updateAgentProfile);
 
 // Upload / replace profile picture (multipart, "file" field)
 router.post('/avatar', auth, ...uploadAvatar);
+
+// Remove the current profile picture (clears User.profile_pic to NULL).
+router.delete('/avatar', auth, deleteAvatar);
 
 export default router;
