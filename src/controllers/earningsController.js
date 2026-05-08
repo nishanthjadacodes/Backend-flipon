@@ -45,17 +45,31 @@ const getAgentEarnings = async (req, res) => {
     // since Sequelize returns DECIMAL columns as strings.
     //
     // FALLBACK CHAIN — admins haven't always configured partner_earning
-    // on every service (the column is allowNull:true). When it's null/0
-    // we don't want the rep to see ₹0 after a real completion. Fall
-    // back to: price_quoted (what the customer paid for THIS booking)
-    // → service.user_cost (catalog price). This guarantees the rep
-    // sees a non-zero number after every completion until admin
-    // properly configures the partner cut per service.
+    // on every service (the column is allowNull:true). Walk through
+    // every available "value" signal so the rep sees a non-zero
+    // number whenever there's any monetary signal on the booking:
+    //
+    //   1. service.partner_earning — explicit commission config (best)
+    //   2. amount_paid             — what the customer actually paid
+    //                                 (Razorpay-confirmed gross)
+    //   3. price_quoted            — what the customer was quoted at
+    //                                 booking creation
+    //   4. service.user_cost       — catalog list price
+    //
+    // Only when ALL FOUR are null/0 does commission resolve to 0 —
+    // that's a genuinely free service AND nothing was paid AND the
+    // catalog has no list price. In practice this means the booking
+    // hasn't been monetised yet; the rep's earnings UI shows ₹0,
+    // which matches reality.
     const commissionFor = (b) => {
       const partnerCut = Number(b.service?.partner_earning || 0);
       if (partnerCut > 0) return partnerCut;
-      const gross = Number(b.price_quoted || b.service?.user_cost || 0);
-      return gross;
+      const paid = Number(b.amount_paid || 0);
+      if (paid > 0) return paid;
+      const quoted = Number(b.price_quoted || 0);
+      if (quoted > 0) return quoted;
+      const listed = Number(b.service?.user_cost || 0);
+      return listed;
     };
 
     const totalAmountFor = (b) =>
