@@ -2,6 +2,7 @@ import { Service, User, Booking } from '../models/index.js';
 import { Op } from 'sequelize';
 import { getIoInstance } from '../config/socket.js';
 import { sendPushNotification } from '../services/notificationService.js';
+import AuditLog from '../models/AuditLog.js';
 
 // Parse "HH:MM - HH:MM" / "HH:MM AM - HH:MM AM" / "HH:MM" into a [startMin, endMin]
 // pair (minutes since midnight). Returns null if unparseable so the caller
@@ -135,6 +136,23 @@ const createService = async (req, res) => {
       description
     });
 
+    // Audit trail — Super Admin can see who added a service to the
+    // catalog, when, and what pricing they set on creation.
+    await AuditLog.record({
+      actor: req.user,
+      action: 'service.create',
+      resource_type: 'service',
+      resource_id: service.id,
+      metadata: {
+        name,
+        category,
+        service_type,
+        user_cost,
+        allow_pay_after,
+      },
+      ip: req.ip,
+    });
+
     res.status(201).json({
       success: true,
       data: service,
@@ -163,7 +181,33 @@ const updateService = async (req, res) => {
       });
     }
 
+    // Snapshot the fields about to change so the audit log shows
+    // before/after — useful for price-change disputes ("who lowered
+    // the GST filing fee?").
+    const trackedKeys = [
+      'name', 'category', 'service_type', 'user_cost', 'partner_earning',
+      'indicative_price_from', 'indicative_price_to', 'expected_timeline',
+      'allow_pay_after', 'is_active',
+    ];
+    const before = {};
+    const after = {};
+    for (const k of trackedKeys) {
+      if (k in updates) {
+        before[k] = service[k];
+        after[k] = updates[k];
+      }
+    }
+
     await service.update(updates);
+
+    await AuditLog.record({
+      actor: req.user,
+      action: 'service.update',
+      resource_type: 'service',
+      resource_id: service.id,
+      metadata: { name: service.name, before, after },
+      ip: req.ip,
+    });
 
     res.json({
       success: true,
@@ -193,6 +237,17 @@ const deleteService = async (req, res) => {
     }
 
     await service.update({ is_active: false });
+
+    // Soft-delete = is_active flipped to false. Logged as
+    // service.delete because behaviourally the catalog hides it.
+    await AuditLog.record({
+      actor: req.user,
+      action: 'service.delete',
+      resource_type: 'service',
+      resource_id: service.id,
+      metadata: { name: service.name, category: service.category },
+      ip: req.ip,
+    });
 
     res.json({
       success: true,

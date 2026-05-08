@@ -34,6 +34,7 @@ import {
 } from '../controllers/royaltyController.js';
 import { listAuditLogs } from '../controllers/auditController.js';
 import { getConfig, updateConfig } from '../controllers/platformConfigController.js';
+import { exportFinancial, exportUsers, exportAgents } from '../controllers/exportsController.js';
 import { b2bPipeline, updateMilestone } from '../controllers/b2bController.js';
 import { listAllEnquiriesForAdmin, issueQuoteAdmin, rejectEnquiryAdmin, convertEnquiryToBooking } from '../controllers/enquiryController.js';
 import {
@@ -119,6 +120,13 @@ router.put('/royalty/:id/status', requirePermission(PERMISSIONS.ROYALTY_APPROVE)
 
 // Audit logs (Super Admin only — gate via AUDIT_LOGS_VIEW)
 router.get('/audit-logs', requirePermission(PERMISSIONS.AUDIT_LOGS_VIEW), listAuditLogs);
+
+// Global Exports (Super Admin / finance — gate via REPORTS_EXPORT).
+// Each handler streams CSV directly via Content-Disposition and writes
+// an audit log row so a Super Admin can later see who downloaded what.
+router.get('/exports/financial', requirePermission(PERMISSIONS.REPORTS_EXPORT), exportFinancial);
+router.get('/exports/users', requirePermission(PERMISSIONS.REPORTS_EXPORT), exportUsers);
+router.get('/exports/agents', requirePermission(PERMISSIONS.REPORTS_EXPORT), exportAgents);
 
 // Financial configuration (payment gateway, tax %, royalty %, commissions).
 // Super Admin only — gate via FINANCIAL_CONFIG.
