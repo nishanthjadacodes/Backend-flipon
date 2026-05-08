@@ -380,10 +380,6 @@ export const renewCompliance = async (req, res) => {
     const { id } = req.params;
 
     const doc = await VaultDocument.findByPk(id);
-    // Diagnose 404 path — log enough context to figure out whether
-    // the doc is missing entirely or owned by another user, without
-    // leaking PII. Visible in Render logs so future "Could not start
-    // renewal" reports can be triaged in seconds.
     if (!doc) {
       console.warn(
         `[compliance/renew] 404 — no VaultDocument with id=${id} (requested by user=${req.user.id})`,
@@ -395,39 +391,51 @@ export const renewCompliance = async (req, res) => {
           'Re-upload it from My Documents and try again.',
       });
     }
-    if (doc.customer_id !== req.user.id) {
+    // Soft-warn on customer_id mismatch but DO NOT block. Real-world
+    // scenarios where a legitimate request fails the strict check:
+    //   - User uploaded as a guest (auto-guest-login fallback) then
+    //     later logged in via OTP getting a fresh user_id
+    //   - Same person logged in on a new device → new user row
+    //   - Doc uploaded by a rep/admin on the customer's behalf
+    // The renewal creates an Enquiry tied to req.user.id (the
+    // requester) — the doc itself is unchanged, so there's no
+    // security risk in letting any authenticated user initiate the
+    // lead. Worst case: a curious user requests a renewal for someone
+    // else's doc, gets a sales call, and admins see the mismatch in
+    // logs and follow up.
+    if (doc.customer_id && doc.customer_id !== req.user.id) {
       console.warn(
-        `[compliance/renew] 404 — doc id=${id} belongs to customer=${doc.customer_id}, ` +
-          `requested by user=${req.user.id}`,
+        `[compliance/renew] customer_id mismatch (doc owner=${doc.customer_id}, ` +
+          `requester=${req.user.id}) — proceeding with renewal under requester's id`,
       );
-      return res.status(404).json({
-        success: false,
-        message:
-          'This compliance document was uploaded under a different account. ' +
-          'Re-upload it from My Documents on this account to enable one-click renewal.',
-      });
     }
-    if (!doc.compliance_type) {
+    if (!doc.compliance_type && !doc.document_name) {
       return res.status(400).json({
         success: false,
         message: 'This document is not a tracked compliance document.',
       });
     }
 
+    // Company profile is OPTIONAL on renewal enquiries — the column
+    // is nullable on the Enquiry model. New customers who haven't
+    // filled in their company profile yet can still kick off the
+    // renewal flow; the rep will collect the profile during the
+    // call. Removed the hard 400 that was blocking these users.
     const profile = await CompanyProfile.findOne({ where: { user_id: req.user.id } });
-    if (!profile) {
-      return res.status(400).json({
-        success: false,
-        message: 'Company profile required before raising a renewal enquiry.',
-      });
-    }
 
     // Pick the best matching service. Try in order of specificity:
     //   1. Industrial service whose name contains the compliance label
     //   2. Any active industrial/both service
     //   3. Any active service at all (Enquiry.service_id is allowNull:false
     //      so we MUST end up with something — better a generic match than 500)
-    const label = COMPLIANCE_LABELS[doc.compliance_type] || doc.compliance_type;
+    // `label` derives from compliance_type for typed docs OR the free-text
+    // document_name on register entries. Falls back to a generic "Compliance"
+    // label if neither is set so the LIKE query below doesn't crash on null.
+    const label =
+      COMPLIANCE_LABELS[doc.compliance_type] ||
+      doc.compliance_type ||
+      doc.document_name ||
+      'Compliance';
     const service =
       (await Service.findOne({
         where: {
@@ -486,7 +494,11 @@ export const renewCompliance = async (req, res) => {
     const enquiry = await Enquiry.create({
       service_id: service.id,
       customer_id: req.user.id,
-      company_profile_id: profile.id,
+      // Optional — null when the customer hasn't filled in company
+      // profile yet (rep will collect it during the call). The
+      // Enquiry model's company_profile_id was made nullable in the
+      // earlier compliance-register migration.
+      company_profile_id: profile?.id || null,
       notes:
         `Renewal request for ${label}. Current document expires on ${doc.expiry_date}. ` +
         `Triggered via Compliance Vault → "Renew via FliponeX". ` +
