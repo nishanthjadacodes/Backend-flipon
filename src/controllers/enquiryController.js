@@ -1,4 +1,4 @@
-import { Enquiry, EnquiryStage, Service, CompanyProfile, User, Booking, sequelize } from '../models/index.js';
+import { Enquiry, EnquiryStage, Service, CompanyProfile, User, Booking, Notification, sequelize } from '../models/index.js';
 import { Op } from 'sequelize';
 import { getStageTemplate } from '../services/stageTemplates.js';
 import { sendPushNotification } from '../services/notificationService.js';
@@ -94,6 +94,34 @@ export const createEnquiry = async (req, res) => {
       { type: 'enquiry', enquiry_id: enquiry.id, action: 'submitted' },
     );
 
+    // Drop a banner-inbox row into every B2B-capable admin's inbox so
+    // the new enquiry pops up the next time they open the dashboard.
+    // Fire-and-forget — never blocks the API response.
+    (async () => {
+      try {
+        const customerName = req.user?.name || 'Customer';
+        const admins = await User.findAll({
+          where: {
+            role: { [Op.in]: ['super_admin', 'b2b_admin'] },
+            is_active: true,
+          },
+          attributes: ['id'],
+        });
+        await Notification.notifyMany(
+          admins.map((a) => a.id),
+          {
+            type: 'enquiry.requested',
+            title: 'New Quote Request',
+            body: `${customerName} requested a quote for ${service.name}. Tap to review and send a quote.`,
+            deep_link: { route: 'b2b-pipeline', enquiryId: enquiry.id },
+            metadata: { enquiry_id: enquiry.id, service_id: enquiry.service_id },
+          },
+        );
+      } catch (e) {
+        console.warn('[createEnquiry] inbox notify failed:', e?.message);
+      }
+    })();
+
     res.status(201).json({ success: true, data: enquiry });
   } catch (error) {
     console.error('createEnquiry error:', error);
@@ -165,6 +193,17 @@ export const issueQuoteAdmin = async (req, res) => {
       `Your industrial enquiry has been quoted. Open the app to review and accept.`,
       { type: 'enquiry_quoted', enquiryId: enquiry.id }
     );
+
+    // In-app banner for the customer — pops the next time they open
+    // the customer app. Independent of push delivery.
+    Notification.notify({
+      user_id: enquiry.customer_id,
+      type: 'quote.sent',
+      title: 'Quote Received',
+      body: `Your industrial enquiry has been quoted. Tap to review and accept.`,
+      deep_link: { route: 'EnquiryDetails', params: { id: enquiry.id } },
+      metadata: { enquiry_id: enquiry.id },
+    }).catch((e) => console.warn('[issueQuote] inbox notify failed:', e?.message));
 
     res.json({ success: true, data: enquiry, message: 'Quote issued' });
   } catch (error) {

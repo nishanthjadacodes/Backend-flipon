@@ -9,10 +9,81 @@ import {
   sendLocationUpdateNotification,
   getNotificationHistory
 } from '../services/notificationService.js';
-import { User } from '../models/index.js';
+import { User, Notification } from '../models/index.js';
+import { Op } from 'sequelize';
 import auth from '../middleware/auth.js';
 
 const router = express.Router();
+
+// ─── In-app banner inbox ────────────────────────────────────────────────
+//
+// Drives the top-down banner that pops on app focus / page mount. The
+// client polls /inbox?unread_only=true on focus, shows the topmost
+// row as a banner, and POSTs /:id/read when the user dismisses or
+// taps it. Independent of push notifications — works even if the
+// device's push token is missing or the OS is throttling.
+
+// GET /api/notifications/inbox — list this user's notifications.
+//   ?unread_only=true → only seen_at IS NULL
+//   ?limit=N (default 20, max 100)
+router.get('/inbox', auth, async (req, res) => {
+  try {
+    const unreadOnly = String(req.query.unread_only || '').toLowerCase() === 'true';
+    const rawLimit = parseInt(req.query.limit, 10) || 20;
+    const limit = Math.min(Math.max(rawLimit, 1), 100);
+
+    const where = { user_id: req.user.id };
+    if (unreadOnly) where.seen_at = { [Op.is]: null };
+
+    const rows = await Notification.findAll({
+      where,
+      order: [['created_at', 'DESC']],
+      limit,
+    });
+    res.json({
+      success: true,
+      notifications: rows,
+      unread_count: unreadOnly
+        ? rows.length
+        : await Notification.count({
+            where: { user_id: req.user.id, seen_at: { [Op.is]: null } },
+          }),
+    });
+  } catch (err) {
+    console.error('[notifications inbox] error:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch inbox' });
+  }
+});
+
+// POST /api/notifications/:id/read — mark single notification as seen.
+// Idempotent — re-marking already-seen rows is a no-op.
+router.post('/:id/read', auth, async (req, res) => {
+  try {
+    const [updated] = await Notification.update(
+      { seen_at: new Date() },
+      { where: { id: req.params.id, user_id: req.user.id, seen_at: { [Op.is]: null } } },
+    );
+    res.json({ success: true, marked: updated });
+  } catch (err) {
+    console.error('[notifications mark-read] error:', err);
+    res.status(500).json({ success: false, message: 'Failed to mark as read' });
+  }
+});
+
+// POST /api/notifications/read-all — bulk mark every unread notif seen.
+// Used by the inbox dropdown's "Mark all as read" button.
+router.post('/read-all', auth, async (req, res) => {
+  try {
+    const [updated] = await Notification.update(
+      { seen_at: new Date() },
+      { where: { user_id: req.user.id, seen_at: { [Op.is]: null } } },
+    );
+    res.json({ success: true, marked: updated });
+  } catch (err) {
+    console.error('[notifications read-all] error:', err);
+    res.status(500).json({ success: false, message: 'Failed to mark all as read' });
+  }
+});
 
 // ─── POST /api/notifications/register-token ─────────────────────────────────
 // Mobile app uploads its Expo push token on launch (and again if the token

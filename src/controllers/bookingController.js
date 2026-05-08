@@ -1,4 +1,4 @@
-import { Booking, User, Service, Document, Referral, sequelize } from '../models/index.js';
+import { Booking, User, Service, Document, Referral, Notification, sequelize } from '../models/index.js';
 import { Op } from 'sequelize';
 import { generateOTP } from '../utils/otpGenerator.js';
 import { getFileUrl, getStoredFileValue } from '../middleware/upload.js';
@@ -401,6 +401,21 @@ const createBooking = async (req, res) => {
               `📥 New booking — ${serviceName} for ${customerName}. Assign a representative.`,
             ).catch(() => {})
           ),
+        );
+
+        // Drop a row into each admin's in-app inbox too, so the banner
+        // pops the next time they open the dashboard. Independent of
+        // the push above (push may be throttled, in-app inbox is the
+        // reliable surface).
+        await Notification.notifyMany(
+          admins.map((a) => a.id),
+          {
+            type: 'booking.created',
+            title: 'New Booking Received',
+            body: `${customerName} requested ${serviceName}. Tap to assign a representative.`,
+            deep_link: { route: 'orders', bookingId: booking.id },
+            metadata: { booking_id: booking.id, service_id: booking.service_id },
+          },
         );
 
         // 2. Available reps (active + KYC-verified). They get a heads-up so

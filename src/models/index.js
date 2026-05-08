@@ -18,6 +18,7 @@ import PlatformConfig from './PlatformConfig.js';
 import Royalty from './Royalty.js';
 import TicketMessage from './TicketMessage.js';
 import WalletTransaction from './WalletTransaction.js';
+import Notification from './Notification.js';
 
 // Define associations
 User.hasMany(Booking, { foreignKey: 'customer_id', as: 'customerBookings' });
@@ -129,6 +130,7 @@ const syncModels = async () => {
     await Royalty.sync();
     await TicketMessage.sync();
     await WalletTransaction.sync();
+    await Notification.sync();
     console.log('Database models synchronized successfully.');
   } catch (error) {
     console.error('Error synchronizing database models:', error);
@@ -156,6 +158,7 @@ export {
   Royalty,
   TicketMessage,
   WalletTransaction,
+  Notification,
   sequelize,
   syncModels
 };

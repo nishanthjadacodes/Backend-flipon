@@ -1,4 +1,4 @@
-import { Service, User, Booking } from '../models/index.js';
+import { Service, User, Booking, Notification } from '../models/index.js';
 import { Op } from 'sequelize';
 import { getIoInstance } from '../config/socket.js';
 import { sendPushNotification } from '../services/notificationService.js';
@@ -508,6 +508,17 @@ const assignAgent = async (req, res) => {
       data: { type: 'task_assigned', bookingId: hydrated.id },
       priority: 'high',
     }).catch((e) => console.warn('[assignAgent] push notify failed:', e?.message));
+
+    // In-app inbox row — pops as a top-down banner the next time the
+    // rep opens the agent app. Survives even if the push is missed.
+    Notification.notify({
+      user_id: agentId,
+      type: 'booking.assigned',
+      title: 'New Task Assigned',
+      body: `${hydrated?.service?.name || 'Service'} for ${hydrated?.customer?.name || 'Customer'}. Tap to view and accept.`,
+      deep_link: { route: 'TaskExecution', params: { taskId: hydrated.id } },
+      metadata: { booking_id: hydrated.id, customer_id: hydrated?.customer?.id },
+    }).catch((e) => console.warn('[assignAgent] inbox notify failed:', e?.message));
 
     res.json({
       success: true,
