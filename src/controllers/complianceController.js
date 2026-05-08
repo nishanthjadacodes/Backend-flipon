@@ -380,8 +380,32 @@ export const renewCompliance = async (req, res) => {
     const { id } = req.params;
 
     const doc = await VaultDocument.findByPk(id);
-    if (!doc || doc.customer_id !== req.user.id) {
-      return res.status(404).json({ success: false, message: 'Document not found' });
+    // Diagnose 404 path — log enough context to figure out whether
+    // the doc is missing entirely or owned by another user, without
+    // leaking PII. Visible in Render logs so future "Could not start
+    // renewal" reports can be triaged in seconds.
+    if (!doc) {
+      console.warn(
+        `[compliance/renew] 404 — no VaultDocument with id=${id} (requested by user=${req.user.id})`,
+      );
+      return res.status(404).json({
+        success: false,
+        message:
+          "We couldn't find this compliance document. It may have been deleted. " +
+          'Re-upload it from My Documents and try again.',
+      });
+    }
+    if (doc.customer_id !== req.user.id) {
+      console.warn(
+        `[compliance/renew] 404 — doc id=${id} belongs to customer=${doc.customer_id}, ` +
+          `requested by user=${req.user.id}`,
+      );
+      return res.status(404).json({
+        success: false,
+        message:
+          'This compliance document was uploaded under a different account. ' +
+          'Re-upload it from My Documents on this account to enable one-click renewal.',
+      });
     }
     if (!doc.compliance_type) {
       return res.status(400).json({
