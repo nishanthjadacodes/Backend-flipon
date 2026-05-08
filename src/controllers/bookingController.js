@@ -543,7 +543,13 @@ const getBookingDetails = async (req, res) => {
         {
           model: User,
           as: 'customer',
-          attributes: ['id', 'name', 'mobile']
+          // Include the customer's last-known coords so the agent's
+          // task-detail screen can compute a real distance from the
+          // rep's current GPS without relying on Android's flaky
+          // Location.geocodeAsync (which returns empty on devices
+          // without Google Mobile Services and shows "Address
+          // unresolved" to the rep).
+          attributes: ['id', 'name', 'mobile', 'current_lat', 'current_lng']
         },
         {
           // Documents attached to this booking — surfaced in the customer
