@@ -759,13 +759,15 @@ const updateJobStatus = async (req, res) => {
       updates.documents_collected_at = new Date();
     }
 
-    // Stamp `completed_at` when this update flips the booking to complete.
-    // Without this, today's earnings filter (which keys on completed_at)
-    // never picks up newly-completed bookings and the rep's "Today's
-    // Earnings" tile stays at ₹0 even after they finish a job. Mirrors
-    // the same stamp /verify-completion already writes for OTP-closed
-    // bookings — keeps both completion paths consistent.
-    if (mapping.dbStatus === 'completed' && !booking.completed_at) {
+    // Stamp `completed_at` whenever this update flips the booking to
+    // complete — even if it had a prior `completed_at` from an earlier
+    // run. This matches /verify-completion's behaviour (which always
+    // overwrites completed_at). Without overwriting, repeated test
+    // runs of the same booking keep the FIRST completion's date, and
+    // today's earnings tile stays ₹0 because the system thinks all
+    // those bookings completed long ago. Production is unaffected:
+    // a real booking completes once, completed_at = first stamp.
+    if (mapping.dbStatus === 'completed') {
       updates.completed_at = new Date();
     }
 

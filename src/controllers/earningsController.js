@@ -96,6 +96,25 @@ const getAgentEarnings = async (req, res) => {
     const week = sum(earnings.filter((e) => inRange(e, weekAgo)));
     const month = sum(earnings.filter((e) => inRange(e, monthAgo)));
 
+    // Diagnostic — visible in Render logs. Tells us why today=0
+    // when there are completed bookings: most often the completed_at
+    // dates are from previous days (system already saw the rep
+    // close them). Helps a Super Admin triage "rep finished a task
+    // today but earnings shows ₹0" by inspecting the actual dates.
+    if (earnings.length > 0) {
+      console.log(
+        `[earnings] agent=${agentId} todayStr=${todayStr} today=${today} ` +
+        `total=${total} bookings:`,
+        earnings.map((e) => ({
+          id: String(e.id).slice(0, 8),
+          status: e.status,
+          date: e.date ? new Date(e.date).toISOString() : null,
+          dateStr: e.date ? new Date(e.date).toDateString() : null,
+          commission: e.commission,
+        })),
+      );
+    }
+
     // Subtotal of work that's done but not yet OTP-verified — useful
     // for the rep app to show "₹X awaiting customer confirmation".
     const pendingTotal = sum(earnings.filter((e) => e.status === 'submitted'));
