@@ -52,6 +52,13 @@ export const adminLogin = async (req, res) => {
     const role = await AdminRole.findOne({ where: { role_name: user.role } });
     const permissions = role ? (Array.isArray(role.permissions) ? role.permissions : []) : [];
 
+    // Stamp last_login_at so Admin Controls can show when each
+    // admin was last active. Fire-and-forget — login succeeds
+    // even if the stamp write fails.
+    user.update({ last_login_at: new Date() }).catch((e) =>
+      console.warn('[adminLogin] last_login_at stamp failed:', e?.message),
+    );
+
     const token = issueToken(user);
     return res.json({ success: true, token, user: sanitize(user, permissions) });
   } catch (err) {

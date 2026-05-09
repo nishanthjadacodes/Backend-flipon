@@ -44,6 +44,12 @@ const MIGRATIONS = [
     sql: 'ALTER TABLE users ADD COLUMN royalty_forfeit_reason VARCHAR(255) NULL',
   },
   {
+    // Admin "last active" tracking — stamped on every successful admin
+    // login so the Admin Controls panel can show "active 2h ago" etc.
+    label: 'users.last_login_at',
+    sql: 'ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL',
+  },
+  {
     label: 'bookings.referral_discount',
     sql: 'ALTER TABLE bookings ADD COLUMN referral_discount DECIMAL(10,2) NULL DEFAULT 0',
   },

@@ -12,6 +12,10 @@ const safeUser = (u) => ({
   is_active: u.is_active,
   is_verified: u.is_verified,
   created_at: u.created_at,
+  // Stamped on every successful admin login. Null for admins who
+  // were created but never logged in. Drives the "active 2h ago"
+  // pill in Admin Controls so a Super Admin can spot stale accounts.
+  last_login_at: u.last_login_at || null,
 });
 
 export const listAdmins = async (req, res) => {

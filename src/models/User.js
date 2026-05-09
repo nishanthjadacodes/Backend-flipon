@@ -138,6 +138,13 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING(255),
     allowNull: true,
   },
+  // Stamped on every successful admin login (including dev-open
+  // synthetic admin) so Admin Controls can show "active 2h ago"
+  // per row instead of guessing from updated_at.
+  last_login_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
   created_at: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW
