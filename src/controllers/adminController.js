@@ -185,7 +185,11 @@ const updateService = async (req, res) => {
     // before/after — useful for price-change disputes ("who lowered
     // the GST filing fee?").
     const trackedKeys = [
-      'name', 'category', 'service_type', 'user_cost', 'partner_earning',
+      'name', 'category', 'service_type', 'user_cost',
+      // Full rate-chart split — audit-log every change so "who lowered
+      // the rep's commission?" / "who bumped the govt fee?" is
+      // answerable from the activity log alone.
+      'govt_fees', 'partner_earning', 'company_margin', 'total_expense',
       'indicative_price_from', 'indicative_price_to', 'expected_timeline',
       'allow_pay_after', 'is_active',
     ];
