@@ -61,6 +61,40 @@ const VOTER_ID_ROWS = [
   { match: 'verify email/mobile',      user_cost: 150, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: 50, expected_timeline: '10–15 Days' },
 ];
 
+// Driving Licence services — per the 09.04.26 rate chart PDF. Each
+// variant is a distinct row because user_cost differs (₹800 LL Test
+// vs ₹22000 Heavy Vehicle DL). Match keys are kept loose so slightly
+// different seed names still pick them up.
+const DRIVING_LICENCE_ROWS = [
+  { match: 'learner licence',          user_cost:  5000, govt_fees:  4000, partner_earning:  500, total_expense:  4500, company_margin:  500, expected_timeline: '5-10 Days' },
+  { match: 'driving licence heavy',    user_cost: 22000, govt_fees: 19000, partner_earning: 2000, total_expense: 21000, company_margin: 1000, expected_timeline: '5-10 Days' },
+  { match: 'dl renewal heavy',         user_cost:  3500, govt_fees:  2500, partner_earning:  500, total_expense:  3000, company_margin:  500, expected_timeline: '5-10 Days' },
+  { match: 'driving licence 2 wheeler', user_cost: 4500, govt_fees:  4000, partner_earning:  500, total_expense:  4500, company_margin:    0, expected_timeline: '5-10 Days' },
+  { match: 'driving licence 4 wheeler', user_cost: 5000, govt_fees:  4000, partner_earning:  500, total_expense:  4500, company_margin:  500, expected_timeline: '5-10 Days' },
+  { match: 'duplicate dl',             user_cost:  1500, govt_fees:  1000, partner_earning:  300, total_expense:  1300, company_margin:  200, expected_timeline: '5-10 Days' },
+  { match: 'change of address',        user_cost:  1500, govt_fees:   800, partner_earning:  500, total_expense:  1300, company_margin:  200, expected_timeline: '5-10 Days' },
+  { match: 'international driving permit', user_cost: 5000, govt_fees: 3500, partner_earning: 1000, total_expense: 4500, company_margin:  500, expected_timeline: '5-10 Days' },
+  { match: 'add class of vehicles',    user_cost:  5000, govt_fees:  4000, partner_earning:  500, total_expense:  4500, company_margin:  500, expected_timeline: '5-10 Days' },
+  { match: 'lltest',                   user_cost:   800, govt_fees:   500, partner_earning:  200, total_expense:   700, company_margin:  100, expected_timeline: '5-10 Days' },
+];
+
+// Other Services — certificates + business registrations from the PDF.
+// Each row has its own category alias because the seed scripts use a
+// different category per service (no shared umbrella).
+const OTHER_SERVICES_ROWS = [
+  { match: 'udhyog aadhar', aliases: ['msme', 'udhyog', 'udyog'],         row: { user_cost:  300, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: 200, expected_timeline: '5-12 Hrs' } },
+  { match: 'food license',  aliases: ['food_license', 'food license', 'fssai'], row: { user_cost: 200, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: 100, expected_timeline: '5-12 Hrs' } },
+  { match: 'trade license', aliases: ['trade_license', 'trade license'],  row: { user_cost: 1000, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: 900, expected_timeline: '5-12 Hrs' } },
+  { match: 'caste certificate', aliases: ['caste', 'caste_certificate', 'caste certificate'], row: { user_cost: 300, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: 200, expected_timeline: '5-12 Hrs' } },
+  { match: 'domicile certificate', aliases: ['domicile', 'domicile_certificate', 'domicile certificate'], row: { user_cost: 400, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: 300, expected_timeline: '5-12 Hrs' } },
+  { match: 'income certificate', aliases: ['income', 'income_certificate', 'income certificate'], row: { user_cost: 250, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: 150, expected_timeline: '5-12 Hrs' } },
+  { match: 'birth certificate', aliases: ['birth', 'birth_certificate', 'birth certificate'], row: { user_cost: 400, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: 300, expected_timeline: '5-12 Hrs' } },
+  { match: 'death certificate', aliases: ['death', 'death_certificate', 'death certificate'], row: { user_cost: 400, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: 300, expected_timeline: '5-12 Hrs' } },
+  // Life Certificate is intentionally sold at a loss (-50 margin) —
+  // customer acquisition loss-leader per the rate chart.
+  { match: 'life certificate', aliases: ['life', 'life_certificate', 'life certificate'], row: { user_cost: 50, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: -50, expected_timeline: '5-12 Hrs' } },
+];
+
 // Ration Card services — all share the same row per the rate chart.
 const RATION_CARD_ROWS = [
   { match: 'new ration card apply',         user_cost: 150, govt_fees: 0, partner_earning: 100, total_expense: 100, company_margin: 50, expected_timeline: '20–30 Days' },
@@ -133,10 +167,11 @@ const run = async () => {
   console.log('✅ DB connected');
 
   const sections = [
-    { label: 'Aadhaar',     rows: AADHAAR_ROWS,     aliases: ['aadhaar', 'aadhar'] },
-    { label: 'PAN',         rows: PAN_ROWS,         aliases: ['pan'] },
-    { label: 'Voter ID',    rows: VOTER_ID_ROWS,    aliases: ['voter_id', 'voter-id', 'voterid', 'voter id', 'epic'] },
-    { label: 'Ration Card', rows: RATION_CARD_ROWS, aliases: ['ration_card', 'ration-card', 'rationcard', 'ration card', 'pds'] },
+    { label: 'Aadhaar',          rows: AADHAAR_ROWS,          aliases: ['aadhaar', 'aadhar'] },
+    { label: 'PAN',              rows: PAN_ROWS,              aliases: ['pan'] },
+    { label: 'Voter ID',         rows: VOTER_ID_ROWS,         aliases: ['voter_id', 'voter-id', 'voterid', 'voter id', 'epic'] },
+    { label: 'Ration Card',      rows: RATION_CARD_ROWS,      aliases: ['ration_card', 'ration-card', 'rationcard', 'ration card', 'pds'] },
+    { label: 'Driving Licence',  rows: DRIVING_LICENCE_ROWS,  aliases: ['driving_licence', 'driving licence', 'driving license', 'dl', 'rto'] },
   ];
 
   for (const section of sections) {
@@ -147,6 +182,15 @@ const run = async () => {
     }
     console.log(`updated ${total} ${section.label} service row(s)`);
   }
+
+  // Other Services — each row carries its own category aliases because
+  // there isn't a shared umbrella category in the seed data.
+  console.log('\n── Other Services ───────────────────────────────');
+  let otherTotal = 0;
+  for (const entry of OTHER_SERVICES_ROWS) {
+    otherTotal += await applyRow({ match: entry.match, ...entry.row }, entry.aliases);
+  }
+  console.log(`updated ${otherTotal} Other service row(s)`);
 
   console.log('\n🎉 Rate chart applied. Booking flow will now show correct prices.');
   process.exit(0);
