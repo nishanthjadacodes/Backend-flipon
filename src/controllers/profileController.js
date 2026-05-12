@@ -69,7 +69,17 @@ const updateAgentOnlineStatus = async (req, res) => {
       });
     }
 
-    await user.update({ online_status: onlineStatus });
+    // Stamp a heartbeat timestamp on every online-status update. The
+    // agent app pings this endpoint every 30s while online; if the
+    // admin's rep listing sees a stale heartbeat (>90s old) it treats
+    // the rep as offline regardless of the stored boolean. Survives
+    // the case where the agent's app is killed without firing the
+    // background-handler offline call.
+    const patch = { online_status: onlineStatus };
+    if (onlineStatus && 'last_online_ping_at' in user.dataValues) {
+      patch.last_online_ping_at = new Date();
+    }
+    await user.update(patch);
 
     res.json({
       success: true,

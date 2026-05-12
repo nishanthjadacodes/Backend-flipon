@@ -611,12 +611,36 @@ const cancelBooking = async (req, res) => {
 
 const getAvailableAgents = async (req, res) => {
   try {
+    // Stale-heartbeat guard: an agent counts as "available" only when
+    // online_status=true AND their last_online_ping_at is within the
+    // last 90 seconds. The agent app heartbeats every 30s while online
+    // and foreground, so anything >90s old means the app went dark
+    // (background, killed, lost network). This is the safety net for
+    // when the AppState 'background' handler doesn't get a chance to
+    // send its offline update — admin no longer sees ghost-online reps.
+    const NINETY_SEC_AGO = new Date(Date.now() - 90 * 1000);
+
+    // Column may not exist on stale DB schemas. Probe a tiny query
+    // to find out; if missing, fall back to the boolean-only check.
+    let useHeartbeat = false;
+    try {
+      const sample = await User.findOne({ attributes: ['last_online_ping_at'], limit: 1 });
+      useHeartbeat = sample !== null || true; // column resolved → use it
+    } catch (_) {
+      useHeartbeat = false;
+    }
+
+    const where = {
+      role: 'agent',
+      is_active: true,
+      online_status: true,
+    };
+    if (useHeartbeat) {
+      where.last_online_ping_at = { [User.sequelize.Sequelize.Op.gte]: NINETY_SEC_AGO };
+    }
+
     const agents = await User.findAll({
-      where: {
-        role: 'agent',
-        is_active: true,
-        online_status: true
-      },
+      where,
       attributes: ['id', 'name', 'mobile', 'rating', 'total_jobs_completed'],
       order: [['rating', 'DESC']]
     });

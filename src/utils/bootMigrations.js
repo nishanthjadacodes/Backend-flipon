@@ -50,6 +50,15 @@ const MIGRATIONS = [
     sql: 'ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL',
   },
   {
+    // Rep online-status heartbeat. Stamped on every PUT /profile/online-status
+    // call (agent app heartbeats every 30s while online). Admin's
+    // available-reps endpoint treats anything older than 90s as offline,
+    // so a rep whose app dies / loses network / is force-closed shows
+    // offline within ~1.5 minutes regardless of the explicit toggle.
+    label: 'users.last_online_ping_at',
+    sql: 'ALTER TABLE users ADD COLUMN last_online_ping_at DATETIME NULL',
+  },
+  {
     label: 'bookings.referral_discount',
     sql: 'ALTER TABLE bookings ADD COLUMN referral_discount DECIMAL(10,2) NULL DEFAULT 0',
   },
