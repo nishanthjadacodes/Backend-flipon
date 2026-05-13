@@ -75,8 +75,11 @@ const updateAgentOnlineStatus = async (req, res) => {
     // the rep as offline regardless of the stored boolean. Survives
     // the case where the agent's app is killed without firing the
     // background-handler offline call.
+    // Always stamp last_online_ping_at when going online — staleness
+    // is what makes the admin's offline gate work. Now that the model
+    // declares the column we don't need the dataValues feature-check.
     const patch = { online_status: onlineStatus };
-    if (onlineStatus && 'last_online_ping_at' in user.dataValues) {
+    if (onlineStatus) {
       patch.last_online_ping_at = new Date();
     }
     await user.update(patch);

@@ -66,6 +66,18 @@ const User = sequelize.define('User', {
     type: DataTypes.BOOLEAN,
     defaultValue: false
   },
+  // Heartbeat timestamp — the rep app PUTs /profile/online-status every
+  // 30s while online + foreground, and the controller stamps NOW() here.
+  // Admin's getAllUsers/getAvailableAgents treat anything older than 90s
+  // as offline regardless of the boolean above, so a rep whose app dies
+  // shows offline within ~90s without needing them to toggle off.
+  // Without this declaration Sequelize was silently dropping the column
+  // from update payloads — the field never made it into the DB and the
+  // staleness check always saw NULL, so reps stayed forever-online.
+  last_online_ping_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
   current_lat: {
     type: DataTypes.DECIMAL(10, 8),
     allowNull: true

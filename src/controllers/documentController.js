@@ -1,3 +1,4 @@
+import { Op } from 'sequelize';
 import { Document, Booking, User } from '../models/index.js';
 import { uploadSingle, deleteFile, getFileUrl, getStoredFileValue } from '../middleware/upload.js';
 import path from 'path';
@@ -183,7 +184,10 @@ const getBookingDocuments = async (req, res) => {
       });
     }
 
-    const documents = await Document.findAll({
+    // First pass — documents explicitly linked to this booking via
+    // booking_id (the canonical relation, populated when createBooking
+    // ran Document.update with the session's document_ids).
+    let documents = await Document.findAll({
       where: { booking_id: bookingId },
       include: [
         {
@@ -194,6 +198,39 @@ const getBookingDocuments = async (req, res) => {
       ],
       order: [['created_at', 'DESC']]
     });
+
+    // Fallback — if the booking has zero linked documents, look for
+    // docs uploaded by the SAME customer in a 24h window around the
+    // booking's creation that aren't yet attached to any booking.
+    // Covers the case where the link step at booking-create silently
+    // failed (race condition, network blip, owner-check mismatch) and
+    // the admin would otherwise see an empty Documents tab.
+    if (documents.length === 0 && booking?.customer_id) {
+      const bookedAt = booking.created_at ? new Date(booking.created_at) : new Date();
+      const windowStart = new Date(bookedAt.getTime() - 24 * 60 * 60 * 1000);
+      const windowEnd = new Date(bookedAt.getTime() + 30 * 60 * 1000);
+      documents = await Document.findAll({
+        where: {
+          uploaded_by: booking.customer_id,
+          booking_id: null,
+          created_at: { [Op.between]: [windowStart, windowEnd] },
+        },
+        include: [
+          { model: User, as: 'uploader', attributes: ['id', 'name', 'mobile'] },
+        ],
+        order: [['created_at', 'DESC']],
+      });
+      if (documents.length > 0) {
+        // Auto-link them now so subsequent fetches are clean. Best-
+        // effort — don't fail the response if the update errors.
+        const ids = documents.map((d) => d.id);
+        Document.update(
+          { booking_id: bookingId },
+          { where: { id: { [Op.in]: ids } } },
+        ).catch((e) => console.warn('[docs] auto-link backfill failed:', e?.message));
+        console.log(`[docs] backfilled ${documents.length} doc(s) onto booking ${bookingId}`);
+      }
+    }
 
     // Add absolute file URLs. Pass `req` so getFileUrl can derive the host
     // from the request if no BASE_URL env var is configured on Render.
