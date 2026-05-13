@@ -538,7 +538,11 @@ const getBookingDetails = async (req, res) => {
         {
           model: User,
           as: 'agent',
-          attributes: ['id', 'name', 'mobile', 'rating', 'total_jobs_completed']
+          // current_lat/lng let the customer's Tracking screen render a
+          // real MapView with the rep's live position. The rep app pings
+          // these columns every 60s via `pingAgentLocation` while online.
+          attributes: ['id', 'name', 'mobile', 'rating', 'total_jobs_completed',
+                       'current_lat', 'current_lng']
         },
         {
           model: User,
