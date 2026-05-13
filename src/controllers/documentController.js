@@ -198,37 +198,126 @@ const getBookingDocuments = async (req, res) => {
       ],
       order: [['created_at', 'DESC']]
     });
+    console.log(`[docs] booking ${bookingId}: ${documents.length} doc(s) directly linked`);
 
-    // Fallback — if the booking has zero linked documents, look for
-    // docs uploaded by the SAME customer in a 24h window around the
-    // booking's creation that aren't yet attached to any booking.
-    // Covers the case where the link step at booking-create silently
-    // failed (race condition, network blip, owner-check mismatch) and
-    // the admin would otherwise see an empty Documents tab.
-    if (documents.length === 0 && booking?.customer_id) {
+    // Fallback — if the booking has zero linked docs, try recovering
+    // orphans uploaded around the booking time. Real-world failure
+    // modes this catches:
+    //   (a) link step at booking-create silently failed
+    //   (b) customer uploaded as guest, then re-logged in before
+    //       confirming → uploaded_by is the OLD guest user id
+    //   (c) flaky mobile signal mid-flow caused the upload to land
+    //       under a different session
+    if (documents.length === 0) {
       const bookedAt = booking.created_at ? new Date(booking.created_at) : new Date();
-      const windowStart = new Date(bookedAt.getTime() - 24 * 60 * 60 * 1000);
-      const windowEnd = new Date(bookedAt.getTime() + 30 * 60 * 1000);
-      documents = await Document.findAll({
-        where: {
-          uploaded_by: booking.customer_id,
-          booking_id: null,
-          created_at: { [Op.between]: [windowStart, windowEnd] },
-        },
-        include: [
-          { model: User, as: 'uploader', attributes: ['id', 'name', 'mobile'] },
-        ],
-        order: [['created_at', 'DESC']],
-      });
-      if (documents.length > 0) {
-        // Auto-link them now so subsequent fetches are clean. Best-
-        // effort — don't fail the response if the update errors.
-        const ids = documents.map((d) => d.id);
-        Document.update(
-          { booking_id: bookingId },
-          { where: { id: { [Op.in]: ids } } },
-        ).catch((e) => console.warn('[docs] auto-link backfill failed:', e?.message));
-        console.log(`[docs] backfilled ${documents.length} doc(s) onto booking ${bookingId}`);
+      const windowStart = new Date(bookedAt.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const windowEnd = new Date(bookedAt.getTime() + 60 * 60 * 1000);
+
+      // Layer 1 — orphan docs uploaded by the SAME customer_id.
+      if (booking.customer_id) {
+        documents = await Document.findAll({
+          where: {
+            uploaded_by: booking.customer_id,
+            booking_id: null,
+            created_at: { [Op.between]: [windowStart, windowEnd] },
+          },
+          include: [
+            { model: User, as: 'uploader', attributes: ['id', 'name', 'mobile'] },
+          ],
+          order: [['created_at', 'DESC']],
+        });
+        console.log(
+          `[docs] layer1 (same customer_id ${booking.customer_id}, orphan, 7d window): ${documents.length} match(es)`,
+        );
+        if (documents.length > 0) {
+          const ids = documents.map((d) => d.id);
+          Document.update(
+            { booking_id: bookingId },
+            { where: { id: { [Op.in]: ids } } },
+          ).catch((e) => console.warn('[docs] layer1 backfill failed:', e?.message));
+        }
+      }
+
+      // Layer 2 — orphan docs whose uploader's mobile matches the
+      // booking's own customer_mobile field. Catches the guest-then-
+      // promoted-account case where the user_id changed between upload
+      // and booking confirmation. customer_mobile is NOT NULL on the
+      // booking model so it's always safe to compare.
+      if (documents.length === 0 && booking.customer_mobile) {
+        const guestDocs = await Document.findAll({
+          where: {
+            booking_id: null,
+            created_at: { [Op.between]: [windowStart, windowEnd] },
+          },
+          include: [
+            {
+              model: User,
+              as: 'uploader',
+              attributes: ['id', 'name', 'mobile'],
+              required: true,
+              where: { mobile: booking.customer_mobile },
+            },
+          ],
+          order: [['created_at', 'DESC']],
+          limit: 20,
+        });
+        console.log(
+          `[docs] layer2 (uploader.mobile=${booking.customer_mobile}, orphan, 7d window): ${guestDocs.length} match(es)`,
+        );
+        if (guestDocs.length > 0) {
+          documents = guestDocs;
+          const ids = guestDocs.map((d) => d.id);
+          Document.update(
+            { booking_id: bookingId },
+            { where: { id: { [Op.in]: ids } } },
+          ).catch((e) => console.warn('[docs] layer2 backfill failed:', e?.message));
+        }
+      }
+
+      // Layer 3 — last-ditch: orphan docs whose uploader's mobile
+      // matches the customer's User.mobile (covers the case where the
+      // logged-in customer's User row has a different mobile than the
+      // one typed into the booking form — e.g., booking-on-behalf).
+      if (documents.length === 0 && booking.customer_id) {
+        const customerRow = await User.findByPk(booking.customer_id, {
+          attributes: ['id', 'mobile'],
+        });
+        if (customerRow?.mobile && customerRow.mobile !== booking.customer_mobile) {
+          const altDocs = await Document.findAll({
+            where: {
+              booking_id: null,
+              created_at: { [Op.between]: [windowStart, windowEnd] },
+            },
+            include: [
+              {
+                model: User,
+                as: 'uploader',
+                attributes: ['id', 'name', 'mobile'],
+                required: true,
+                where: { mobile: customerRow.mobile },
+              },
+            ],
+            order: [['created_at', 'DESC']],
+            limit: 20,
+          });
+          console.log(
+            `[docs] layer3 (uploader.mobile=${customerRow.mobile} from User row, orphan): ${altDocs.length} match(es)`,
+          );
+          if (altDocs.length > 0) {
+            documents = altDocs;
+            const ids = altDocs.map((d) => d.id);
+            Document.update(
+              { booking_id: bookingId },
+              { where: { id: { [Op.in]: ids } } },
+            ).catch((e) => console.warn('[docs] layer3 backfill failed:', e?.message));
+          }
+        }
+      }
+
+      if (documents.length === 0) {
+        console.log(
+          `[docs] booking ${bookingId}: no docs found via any fallback (customer_id=${booking.customer_id}, customer_mobile=${booking.customer_mobile})`,
+        );
       }
     }
 
