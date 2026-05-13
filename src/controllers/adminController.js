@@ -292,7 +292,30 @@ const getAllUsers = async (req, res) => {
 
     const users = await User.findAll(opts);
 
-    res.json({ success: true, data: users });
+    // Apply the heartbeat staleness gate for agent rows so the admin's
+    // Representative Management page reflects "left the app without
+    // toggling off → offline". The rep app pings online-status every
+    // 30s while online + foreground; if last_online_ping_at is older
+    // than 90s, force online_status=false in the response (DB row
+    // stays unchanged — next heartbeat will lift it back). Without
+    // this, reps who background or kill the app showed as ONLINE
+    // forever in the admin.
+    const NINETY_SEC = 90 * 1000;
+    const now = Date.now();
+    const data = users.map((u) => {
+      const obj = typeof u.toJSON === 'function' ? u.toJSON() : { ...u };
+      if (obj.role === 'agent' && obj.online_status) {
+        const ping = obj.last_online_ping_at
+          ? new Date(obj.last_online_ping_at).getTime()
+          : 0;
+        if (!ping || now - ping > NINETY_SEC) {
+          obj.online_status = false;
+        }
+      }
+      return obj;
+    });
+
+    res.json({ success: true, data });
   } catch (error) {
     console.error('Error fetching users:', error);
     res.status(500).json({
