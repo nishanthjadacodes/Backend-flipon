@@ -154,20 +154,46 @@ export const revenueReport = async (req, res) => {
 };
 
 // Agent performance leaderboard.
+//
+// Applies the same 90s heartbeat-staleness gate that getAllUsers and
+// getAvailableAgents use — without it, a rep who toggled online but
+// then backgrounded / closed the app stays "online" in this response
+// forever, which surfaces as a misleading green chip on the admin
+// dashboard's Low-Performance Representatives panel. The rep app
+// pings online-status every 30s while online + foreground; if the
+// last ping is older than 90s, we force online_status=false in the
+// payload (the DB row stays untouched — next heartbeat will lift it
+// back).
 export const agentPerformance = async (req, res) => {
   try {
     const limit = Math.max(1, Math.min(100, parseInt(req.query.limit || '20', 10)));
+    const NINETY_SEC = 90 * 1000;
 
     const agents = await User.findAll({
       where: { role: 'agent', is_active: true },
       attributes: [
-        'id', 'name', 'mobile', 'rating', 'total_jobs_completed', 'online_status', 'assigned_zone',
+        'id', 'name', 'mobile', 'rating', 'total_jobs_completed',
+        'online_status', 'last_online_ping_at', 'assigned_zone',
       ],
       order: [['total_jobs_completed', 'DESC'], ['rating', 'DESC']],
       limit,
     });
 
-    res.json({ success: true, data: agents });
+    const now = Date.now();
+    const data = agents.map((u) => {
+      const obj = typeof u.toJSON === 'function' ? u.toJSON() : { ...u };
+      if (obj.online_status) {
+        const ping = obj.last_online_ping_at
+          ? new Date(obj.last_online_ping_at).getTime()
+          : 0;
+        if (!ping || now - ping > NINETY_SEC) {
+          obj.online_status = false;
+        }
+      }
+      return obj;
+    });
+
+    res.json({ success: true, data });
   } catch (error) {
     console.error('agentPerformance error:', error);
     res.status(500).json({ success: false, message: 'Failed to load representative performance' });
