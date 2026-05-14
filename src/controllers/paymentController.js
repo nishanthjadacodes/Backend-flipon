@@ -1,6 +1,39 @@
 import crypto from 'crypto';
 import Razorpay from 'razorpay';
 import { Booking } from '../models/index.js';
+import { getIoInstance } from '../config/socket.js';
+
+// Emit a `payment_verified` event to every admin role room. The admin
+// dashboard's Revenue Summary listens for this and refreshes its
+// totals instantly — no waiting for the 30s poll. We emit to each
+// admin role explicitly because users join `role_<role>` (e.g.
+// role_super_admin, role_finance_admin), not a generic `role_admin`.
+// Best-effort: socket emit failure must NEVER break the HTTP response.
+const ADMIN_ROLES = [
+  'super_admin', 'operations_manager', 'finance_admin',
+  'b2b_admin', 'customer_support',
+];
+const emitPaymentVerified = (booking, paymentMethod, amount) => {
+  try {
+    const io = getIoInstance();
+    if (!io) return;
+    const payload = {
+      booking_id: booking.id,
+      booking_number: booking.booking_number || null,
+      customer_id: booking.customer_id,
+      booking_type: booking.booking_type,
+      amount: Number(amount) || 0,
+      company_margin: Number(booking.company_margin) || 0,
+      payment_method: paymentMethod || null,
+      paid_at: new Date(),
+    };
+    for (const role of ADMIN_ROLES) {
+      io.to(`role_${role}`).emit('payment_verified', payload);
+    }
+  } catch (e) {
+    console.warn('[payment] socket emit payment_verified failed:', e?.message);
+  }
+};
 
 // Single shared Razorpay client. Falls back to undefined if env vars are
 // missing — the controller checks before using.
@@ -131,6 +164,8 @@ const verifyPayment = async (req, res) => {
       paid_at: new Date(),
     });
 
+    emitPaymentVerified(booking, payment.method || 'online', Number(payment.amount) / 100);
+
     res.json({
       success: true,
       message: 'Payment verified and recorded',
@@ -169,6 +204,8 @@ const processPayment = async (req, res) => {
       amount_paid: parseFloat(amount),
       paid_at: new Date(),
     });
+
+    emitPaymentVerified(booking, payment_method, parseFloat(amount));
 
     res.json({
       success: true,

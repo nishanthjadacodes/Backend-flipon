@@ -4,18 +4,47 @@ import jwt from 'jsonwebtoken';
 // Store connected users
 const connectedUsers = new Map();
 
-// Socket authentication middleware
+// Dev-open synthetic super_admin — same identity the HTTP auth middleware
+// hands back when `ADMIN_DEV_OPEN=true` is set in Render. Mirrors that
+// behaviour for socket connections so the admin dashboard (which has no
+// login screen yet) can connect for live updates. DO NOT leave dev-open
+// enabled once real admin auth ships — it allows anonymous role_super_admin
+// socket access.
+const SYNTHETIC_SUPER_ADMIN = Object.freeze({
+  id: 0,
+  email: 'dev-open@flipon.local',
+  mobile: '0000000000',
+  role: 'super_admin',
+  name: 'Admin (dev-open)',
+});
+const devOpen = () =>
+  String(process.env.ADMIN_DEV_OPEN || '').toLowerCase() === 'true';
+
+// Socket authentication middleware.
+//
+// Order of precedence:
+//   1. If a JWT token is in handshake.auth, verify it (existing behaviour).
+//   2. Else if ADMIN_DEV_OPEN=true AND handshake explicitly opts into the
+//      admin role (`auth.admin === true`), synthesize a super_admin. The
+//      opt-in flag is what keeps unauthenticated CUSTOMER / AGENT app
+//      sockets from accidentally landing in the admin room.
+//   3. Else reject — same as before.
 const authenticateSocket = (socket, next) => {
   try {
-    const token = socket.handshake.auth.token;
+    const token = socket.handshake.auth?.token;
 
-    if (!token) {
-      return next(new Error('Authentication token required'));
+    if (token) {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      socket.user = decoded;
+      return next();
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    socket.user = decoded;
-    next();
+    if (devOpen() && socket.handshake.auth?.admin === true) {
+      socket.user = SYNTHETIC_SUPER_ADMIN;
+      return next();
+    }
+
+    return next(new Error('Authentication token required'));
   } catch (error) {
     next(new Error('Invalid authentication token'));
   }
