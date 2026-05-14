@@ -144,6 +144,26 @@ const Booking = sequelize.define('Booking', {
     allowNull: true,
     defaultValue: 0,
   },
+  // ─── Price-split snapshot ─────────────────────────────────────────
+  // Copied from the Service row at booking-create time so each row is
+  // immune to later rate-chart edits. The invariant is
+  //   final_price = govt_fees + partner_earning + company_margin
+  // (after the referral discount, which we deduct from company_margin —
+  // the company sponsors the discount, the partner gets their full cut).
+  // Finance & Accounts > Revenue Reports sums company_margin to show
+  // actual profit, separately from gross revenue (final_price).
+  govt_fees: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+  },
+  partner_earning: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+  },
+  company_margin: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+  },
   payment_status: {
     type: DataTypes.ENUM('pending', 'paid', 'refunded'),
     defaultValue: 'pending'

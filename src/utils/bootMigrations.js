@@ -82,6 +82,23 @@ const MIGRATIONS = [
     label: 'bookings.paid_at',
     sql: 'ALTER TABLE bookings ADD COLUMN paid_at DATETIME NULL',
   },
+  // Per-booking price-split snapshot. Without these, Finance & Accounts
+  // can only show GROSS revenue (sum of final_price); it can't separate
+  // out what the company keeps (margin) vs. what passes through to govt
+  // fees + service-partner earnings. Snapshotted at booking-create time
+  // so old bookings stay immune to later rate-chart edits.
+  {
+    label: 'bookings.govt_fees',
+    sql: 'ALTER TABLE bookings ADD COLUMN govt_fees DECIMAL(10,2) NULL',
+  },
+  {
+    label: 'bookings.partner_earning',
+    sql: 'ALTER TABLE bookings ADD COLUMN partner_earning DECIMAL(10,2) NULL',
+  },
+  {
+    label: 'bookings.company_margin',
+    sql: 'ALTER TABLE bookings ADD COLUMN company_margin DECIMAL(10,2) NULL',
+  },
   // B2B / Industrial enquiry quote fields. Without these the
   // "Send Quote to Customer" button in the admin dashboard fails
   // silently because enquiry.update({...quote fields}) → Unknown column.

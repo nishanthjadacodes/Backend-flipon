@@ -294,6 +294,17 @@ const createBooking = async (req, res) => {
       console.error('[referral] discount lookup failed (proceeding at full price):', refErr?.message);
     }
 
+    // Snapshot the rate-chart split onto this booking row so historical
+    // bookings stay immune to later service-price edits AND so the
+    // Finance & Accounts report can show actual margin vs gross revenue.
+    // Invariant: final_price = govt_fees + partner_earning + company_margin
+    // (after deducting any referral discount, which the company absorbs —
+    // the partner still gets their full earning).
+    const svcGovtFees = parseFloat(service.govt_fees || 0);
+    const svcPartnerEarning = parseFloat(service.partner_earning || 0);
+    const svcCompanyMargin = parseFloat(service.company_margin || 0);
+    const snapshotCompanyMargin = Math.max(0, svcCompanyMargin - referralDiscount);
+
     const booking = await Booking.create({
       customer_id: req.user.id,
       service_id: finalServiceId,
@@ -310,7 +321,11 @@ const createBooking = async (req, res) => {
       documents_required: service.required_documents,
       dynamic_fields: req.body.dynamic_fields || null,
       price_quoted: priceQuoted,
+      final_price: priceQuoted,
       referral_discount: referralDiscount,
+      govt_fees: svcGovtFees,
+      partner_earning: svcPartnerEarning,
+      company_margin: snapshotCompanyMargin,
       notes,
       priority,
       booking_number: bookingNumber,

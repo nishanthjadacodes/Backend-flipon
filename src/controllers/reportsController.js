@@ -125,6 +125,13 @@ export const operationalReport = async (req, res) => {
 };
 
 // Revenue report split by booking_type (consumer vs industrial).
+//
+// Returns gross revenue (what the customer paid) AND the rate-chart
+// price-split breakdown — govt fees pass-through, service-partner
+// earnings, and company margin (= actual profit). Finance & Accounts
+// reads this to surface margin as a separate line from gross revenue.
+// Old paid bookings whose split wasn't snapshotted at create time will
+// contribute 0 to the split columns (NULL summed as 0 via COALESCE).
 export const revenueReport = async (req, res) => {
   try {
     const windowDays = Math.max(1, Math.min(365, parseInt(req.query.days || '30', 10)));
@@ -135,16 +142,52 @@ export const revenueReport = async (req, res) => {
         'booking_type',
         [fn('COUNT', col('id')), 'count'],
         [fn('COALESCE', fn('SUM', col('final_price')), 0), 'revenue'],
+        [fn('COALESCE', fn('SUM', col('govt_fees')), 0), 'govt_fees'],
+        [fn('COALESCE', fn('SUM', col('partner_earning')), 0), 'partner_earning'],
+        [fn('COALESCE', fn('SUM', col('company_margin')), 0), 'company_margin'],
       ],
       where: { created_at: { [Op.gte]: since }, payment_status: 'paid' },
       group: ['booking_type'],
       raw: true,
     });
 
-    const data = { consumer: { count: 0, revenue: 0 }, industrial: { count: 0, revenue: 0 } };
-    rows.forEach((r) => {
-      data[r.booking_type] = { count: Number(r.count) || 0, revenue: Number(r.revenue) || 0 };
+    const empty = () => ({
+      count: 0,
+      revenue: 0,
+      govt_fees: 0,
+      partner_earning: 0,
+      company_margin: 0,
     });
+    const data = { consumer: empty(), industrial: empty() };
+    let totalRevenue = 0;
+    let totalGovtFees = 0;
+    let totalPartnerEarning = 0;
+    let totalCompanyMargin = 0;
+    let totalCount = 0;
+
+    rows.forEach((r) => {
+      const bucket = {
+        count: Number(r.count) || 0,
+        revenue: Number(r.revenue) || 0,
+        govt_fees: Number(r.govt_fees) || 0,
+        partner_earning: Number(r.partner_earning) || 0,
+        company_margin: Number(r.company_margin) || 0,
+      };
+      data[r.booking_type] = bucket;
+      totalCount += bucket.count;
+      totalRevenue += bucket.revenue;
+      totalGovtFees += bucket.govt_fees;
+      totalPartnerEarning += bucket.partner_earning;
+      totalCompanyMargin += bucket.company_margin;
+    });
+
+    data.total = {
+      count: totalCount,
+      revenue: totalRevenue,
+      govt_fees: totalGovtFees,
+      partner_earning: totalPartnerEarning,
+      company_margin: totalCompanyMargin,
+    };
 
     res.json({ success: true, windowDays, data });
   } catch (error) {
