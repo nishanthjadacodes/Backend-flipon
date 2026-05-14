@@ -64,6 +64,13 @@ const Booking = sequelize.define('Booking', {
     type: DataTypes.STRING(100),
     allowNull: false
   },
+  // The person the service is FOR (e.g. a customer booking an Aadhaar
+  // update for a family member). NULL when the customer is the
+  // applicant — UI should fall back to customer_name in that case.
+  applicant_name: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+  },
   customer_mobile: {
     type: DataTypes.STRING(15),
     allowNull: false

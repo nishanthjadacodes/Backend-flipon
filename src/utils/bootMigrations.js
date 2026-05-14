@@ -99,6 +99,16 @@ const MIGRATIONS = [
     label: 'bookings.company_margin',
     sql: 'ALTER TABLE bookings ADD COLUMN company_margin DECIMAL(10,2) NULL',
   },
+  // Applicant name — the person the service is FOR, distinct from the
+  // customer who books / pays. Common when a customer books an Aadhaar
+  // update for a family member. Captured in the booking form
+  // (BookingScreen.tsx) but was silently dropped server-side until this
+  // column existed; admin Order Management + agent Earnings Ledger now
+  // surface it so reps know who they're serving.
+  {
+    label: 'bookings.applicant_name',
+    sql: 'ALTER TABLE bookings ADD COLUMN applicant_name VARCHAR(100) NULL',
+  },
   // B2B / Industrial enquiry quote fields. Without these the
   // "Send Quote to Customer" button in the admin dashboard fails
   // silently because enquiry.update({...quote fields}) → Unknown column.

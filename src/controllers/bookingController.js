@@ -154,7 +154,14 @@ const createBooking = async (req, res) => {
     const rawBookingType = req.body.booking_type || req.body.bookingType || 'consumer';
     const finalBookingType = ['consumer', 'industrial'].includes(rawBookingType) ? rawBookingType : 'consumer';
 
-    const finalCustomerName = req.body.customer_name || req.body.name || req.body.full_name || req.body.customer || req.body.applicant_name || req.user?.name || req.user?.mobile || null;
+    // customer_name = the booking account holder (who paid).
+    // applicant_name = the person the service is FOR (may be a family
+    // member). Keep them separate so admin + agent can see both.
+    // We intentionally do NOT fall back from customer_name to applicant_name
+    // here anymore (that would conflate the two identities); we only fall
+    // back to the logged-in user's profile when no customer name was sent.
+    const finalCustomerName = req.body.customer_name || req.body.name || req.body.full_name || req.body.customer || req.user?.name || req.user?.mobile || null;
+    const finalApplicantName = (req.body.applicant_name || '').toString().trim() || null;
     const finalMobile = req.body.customer_mobile || req.body.mobile || req.body.mobile_number || req.body.phone || null;
     const finalAddress = req.body.service_address || req.body.address || req.body.customer_address || req.body.location || null;
     
@@ -310,6 +317,7 @@ const createBooking = async (req, res) => {
       service_id: finalServiceId,
       booking_type: finalBookingType,
       customer_name: finalCustomerName,
+      applicant_name: finalApplicantName,
       customer_mobile: finalMobile,
       customer_email,
       service_address: finalAddress,

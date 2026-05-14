@@ -87,10 +87,19 @@ const getAgentEarnings = async (req, res) => {
     // can surface "₹X awaiting verification" separately if it wants.
     const earnings = completedBookings.map((b) => {
       const isPending = b.status === 'submitted';
+      // applicant_name is whom the service was actually rendered to —
+      // distinct from customerName (the booking account holder, who may
+      // have booked on a family member's behalf). Falls back to
+      // customerName so older bookings without a snapshot still render.
+      const customerLabel = b.customer?.name || b.customer_name || 'Customer';
+      const applicantLabel = b.applicant_name && b.applicant_name.trim()
+        ? b.applicant_name.trim()
+        : customerLabel;
       return {
         id: b.id,
         taskId: String(b.id || '').substring(0, 8),
-        customerName: b.customer?.name || 'Customer',
+        customerName: customerLabel,
+        applicantName: applicantLabel,
         serviceName: b.service?.name || 'Service',
         amount: totalAmountFor(b),         // gross booking value
         commission: commissionFor(b),      // rep's actual earning
