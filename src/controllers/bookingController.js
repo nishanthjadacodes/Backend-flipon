@@ -301,6 +301,76 @@ const createBooking = async (req, res) => {
       console.error('[referral] discount lookup failed (proceeding at full price):', refErr?.message);
     }
 
+    // Duplicate-booking guard. Block the second submission when the
+    // exact same customer is trying to rebook the exact same service
+    // for the exact same applicant at the exact same date/time/address
+    // for the same price. Common cause: customer taps "Pay" twice on a
+    // flaky connection, or re-submits the form after a back-nav, and
+    // we'd otherwise end up with two paid bookings for one job.
+    //
+    // Escape hatch: a DIFFERENT applicant_name is treated as a
+    // legitimate second booking (e.g. customer booking the same service
+    // for a family member). NULL applicant on both sides also counts
+    // as a match — neither booking specified an applicant.
+    //
+    // We deliberately ignore cancelled / rejected rows so a customer
+    // who cancelled and wants to rebook can do so.
+    try {
+      const candidates = await Booking.findAll({
+        where: {
+          customer_id: req.user.id,
+          service_id: finalServiceId,
+          customer_mobile: finalMobile,
+          preferred_date,
+          preferred_time,
+          status: { [Op.notIn]: ['cancelled', 'rejected'] },
+        },
+        attributes: [
+          'id', 'booking_number', 'applicant_name', 'price_quoted',
+          'service_address', 'status', 'created_at',
+        ],
+        order: [['created_at', 'DESC']],
+        limit: 10,
+      });
+      const sameApplicant = (a, b) => {
+        const norm = (s) => (s || '').toString().trim().toLowerCase() || null;
+        return norm(a) === norm(b);
+      };
+      const sameAddress = (a, b) => {
+        const stable = (v) => {
+          if (!v) return '';
+          if (typeof v === 'string') return v.trim().toLowerCase();
+          try {
+            return JSON.stringify(v);
+          } catch (_) {
+            return '';
+          }
+        };
+        return stable(a) === stable(b);
+      };
+      const dupe = candidates.find((b) =>
+        Number(b.price_quoted || 0) === Number(priceQuoted || 0) &&
+        sameAddress(b.service_address, finalAddress) &&
+        sameApplicant(b.applicant_name, finalApplicantName),
+      );
+      if (dupe) {
+        return res.status(409).json({
+          success: false,
+          code: 'DUPLICATE_BOOKING',
+          message:
+            'A booking with the same service, date, time, address and applicant already exists. ' +
+            'Change the applicant name or modify the details to proceed.',
+          existingBookingId: dupe.id,
+          existingBookingNumber: dupe.booking_number,
+        });
+      }
+    } catch (dupErr) {
+      // Don't block the booking on a guard query failure — log and
+      // proceed. The race window is small and the worst case is one
+      // accidental duplicate that admin can refund.
+      console.error('[booking] duplicate-guard query failed (proceeding):', dupErr?.message);
+    }
+
     // Snapshot the rate-chart split onto this booking row so historical
     // bookings stay immune to later service-price edits AND so the
     // Finance & Accounts report can show actual margin vs gross revenue.
