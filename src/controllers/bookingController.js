@@ -253,14 +253,19 @@ const createBooking = async (req, res) => {
       });
     }
 
-    // Sequential customer-facing booking number (1, 2, 3, …). Surfaces
-    // as Flip#001 / Flip#002 in the app. Best-effort — if the SELECT or
-    // unique-constraint hits a collision we fall through to NULL and the
-    // app falls back to its UUID-derived display.
+    // Sequential customer-facing booking number, starting at 1000 so
+    // the user-facing IDs always look like real four-digit order
+    // numbers (#1000, #1001, …) rather than the early #0001 / #0083
+    // we shipped initially. If the table already has booking_numbers
+    // beyond 1000, we keep incrementing from the max. Best-effort —
+    // if the SELECT or unique-constraint hits a collision we fall
+    // through to NULL and the app falls back to its UUID-derived
+    // display.
+    const BOOKING_NUMBER_FLOOR = 1000;
     let bookingNumber = null;
     try {
       const [rows] = await sequelize.query(
-        'SELECT COALESCE(MAX(booking_number), 0) + 1 AS next FROM bookings',
+        `SELECT GREATEST(COALESCE(MAX(booking_number), 0) + 1, ${BOOKING_NUMBER_FLOOR}) AS next FROM bookings`,
       );
       bookingNumber = rows?.[0]?.next || null;
     } catch (e) {
