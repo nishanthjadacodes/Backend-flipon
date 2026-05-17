@@ -31,6 +31,7 @@ import vaultRoutes from './src/routes/vaultRoutes.js';
 import b2bReportsRoutes from './src/routes/b2bReportsRoutes.js';
 import walletRoutes from './src/routes/walletRoutes.js';
 import complianceRoutes from './src/routes/complianceRoutes.js';
+import flashNotificationRoutes from './src/routes/flashNotificationRoutes.js';
 import { startComplianceAlertScheduler } from './src/jobs/complianceAlerts.js';
 import { startReferralExpiryScheduler } from './src/jobs/referralExpiry.js';
 import { startRoyaltyPayoutScheduler } from './src/jobs/royaltyPayout.js';
@@ -166,6 +167,7 @@ app.use('/api/vault', vaultRoutes);
 app.use('/api/admin/reports/b2b', b2bReportsRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/compliance', complianceRoutes);
+app.use('/api/flash-notifications', flashNotificationRoutes);
 
 // Smart Alert system — daily-ish scan that pushes 90/60/30-day expiry
 // notifications for industrial customers' compliance documents.

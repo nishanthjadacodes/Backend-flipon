@@ -109,6 +109,32 @@ const MIGRATIONS = [
     label: 'bookings.applicant_name',
     sql: 'ALTER TABLE bookings ADD COLUMN applicant_name VARCHAR(100) NULL',
   },
+  // Flash notifications — Flipkart / Myntra-style splash banners shown
+  // to the customer app on launch BEFORE the login screen. Super admin
+  // creates them in the admin dashboard for festival offers, important
+  // announcements, etc. The table is brand-new (not an ALTER) so we
+  // wrap CREATE TABLE in the same try/catch — if it already exists,
+  // the isAlreadyExistsError check swallows the duplicate-table error.
+  {
+    label: 'flash_notifications (table)',
+    sql:
+      'CREATE TABLE IF NOT EXISTS flash_notifications (' +
+      'id CHAR(36) NOT NULL PRIMARY KEY, ' +
+      'title VARCHAR(140) NOT NULL, ' +
+      'body TEXT NULL, ' +
+      'image_url VARCHAR(512) NULL, ' +
+      'cta_label VARCHAR(60) NULL, ' +
+      'cta_url VARCHAR(512) NULL, ' +
+      "audience ENUM('all','guest','logged_in') NOT NULL DEFAULT 'all', " +
+      'priority INT NOT NULL DEFAULT 0, ' +
+      'is_active TINYINT(1) NOT NULL DEFAULT 1, ' +
+      'active_from DATETIME NULL, ' +
+      'active_until DATETIME NULL, ' +
+      'created_by CHAR(36) NULL, ' +
+      'created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, ' +
+      'updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP' +
+      ')',
+  },
   // B2B / Industrial enquiry quote fields. Without these the
   // "Send Quote to Customer" button in the admin dashboard fails
   // silently because enquiry.update({...quote fields}) → Unknown column.
@@ -209,11 +235,13 @@ const getColumns = async (table) => {
   }
 };
 
-// Extract table name from "ALTER TABLE <name> ADD COLUMN ...".
+// Extract table name from "ALTER TABLE <name>" or
+// "CREATE TABLE [IF NOT EXISTS] <name>".
 const extractTable = (sql) => {
-  const m = sql.match(/ALTER\s+TABLE\s+(\w+)/i);
+  const m = sql.match(/(?:ALTER|CREATE)\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/i);
   return m ? m[1] : null;
 };
+const isCreateTable = (sql) => /^\s*CREATE\s+TABLE/i.test(sql);
 // Extract column name from "ADD COLUMN <name> ...".
 const extractColumn = (sql) => {
   const m = sql.match(/ADD\s+COLUMN\s+(\w+)/i);
@@ -236,10 +264,28 @@ const groupByTable = (pending) => {
 };
 
 export const runBootMigrations = async () => {
-  // Step 1: skip every migration whose target column already exists.
-  // One DESCRIBE per affected table — way cheaper than N failing ALTERs.
+  // Step 0: CREATE TABLE entries — handled separately because they
+  // don't have a per-column existence check. CREATE TABLE IF NOT
+  // EXISTS is itself idempotent so we just run each one; the
+  // duplicate-table error path is swallowed identically to ALTERs.
+  const createTableEntries = MIGRATIONS.filter((m) => isCreateTable(m.sql));
+  for (const m of createTableEntries) {
+    try {
+      await sequelize.query(m.sql);
+      console.log(`[boot-migrate] ✅ ${m.label} — ensured`);
+    } catch (e) {
+      if (!isAlreadyExistsError(e?.message)) {
+        console.error(`[boot-migrate] ❌ ${m.label}:`, e?.message);
+      }
+    }
+  }
+
+  // Step 1: skip every ALTER ADD COLUMN migration whose target column
+  // already exists. One DESCRIBE per affected table — way cheaper
+  // than N failing ALTERs.
   const pending = [];
   for (const m of MIGRATIONS) {
+    if (isCreateTable(m.sql)) continue;       // handled above
     const table = extractTable(m.sql);
     const column = extractColumn(m.sql);
     if (!table || !column) continue;
