@@ -135,6 +135,20 @@ const MIGRATIONS = [
       'updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP' +
       ')',
   },
+  // Discount fields on flash_notifications. When the admin attaches a
+  // discount % + a target pattern (keyword or substring), the
+  // customer app's BookingScreen applies that discount in the
+  // Payment Summary for any service whose name OR category matches
+  // the pattern. NULL discount_percent → display-only banner with
+  // no pricing effect (current default behaviour).
+  {
+    label: 'flash_notifications.discount_percent',
+    sql: 'ALTER TABLE flash_notifications ADD COLUMN discount_percent INT NULL',
+  },
+  {
+    label: 'flash_notifications.target_service_pattern',
+    sql: 'ALTER TABLE flash_notifications ADD COLUMN target_service_pattern VARCHAR(255) NULL',
+  },
   // B2B / Industrial enquiry quote fields. Without these the
   // "Send Quote to Customer" button in the admin dashboard fails
   // silently because enquiry.update({...quote fields}) → Unknown column.

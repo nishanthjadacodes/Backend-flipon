@@ -75,14 +75,22 @@ const sanitisePayload = (body, userId) => {
   const allowed = [
     'title', 'body', 'image_url', 'cta_label', 'cta_url',
     'audience', 'priority', 'is_active', 'active_from', 'active_until',
+    'discount_percent', 'target_service_pattern',
   ];
   const out = {};
   for (const k of allowed) {
     if (body[k] !== undefined) out[k] = body[k];
   }
   // Coerce empty strings on date fields to null so MySQL accepts them.
-  for (const k of ['active_from', 'active_until']) {
+  for (const k of ['active_from', 'active_until', 'target_service_pattern']) {
     if (out[k] === '') out[k] = null;
+  }
+  // Clamp / coerce discount_percent. Anything outside 0–100 → null
+  // (treated as no discount). String inputs get parsed.
+  if (out.discount_percent !== undefined) {
+    const n = Number(out.discount_percent);
+    out.discount_percent =
+      Number.isFinite(n) && n > 0 && n <= 100 ? Math.round(n) : null;
   }
   if (userId) out.created_by = userId;
   return out;

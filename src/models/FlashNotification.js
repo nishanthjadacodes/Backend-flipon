@@ -75,6 +75,21 @@ const FlashNotification = sequelize.define('FlashNotification', {
     type: DataTypes.UUID,
     allowNull: true,
   },
+  // Discount % to apply to matching services in the customer app's
+  // Payment Summary. NULL = display-only banner with no pricing
+  // effect. 50 = 50% off the base service price.
+  discount_percent: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+  // Substring / keyword that matches against service.name + service.category
+  // (case-insensitive). e.g. 'aadhaar' matches every Aadhaar service;
+  // 'pan' matches every PAN service. NULL = no service-side match.
+  // Future: could be a regex, but plain substring is enough today.
+  target_service_pattern: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+  },
 }, {
   tableName: 'flash_notifications',
   timestamps: true,
