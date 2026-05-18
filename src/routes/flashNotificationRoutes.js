@@ -6,6 +6,7 @@ import {
   createFlashNotification,
   updateFlashNotification,
   deleteFlashNotification,
+  showcaseFlashNotification,
 } from '../controllers/flashNotificationController.js';
 
 const router = express.Router();
@@ -25,5 +26,9 @@ router.get('/', auth, listFlashNotifications);
 router.post('/', auth, createFlashNotification);
 router.put('/:id', auth, updateFlashNotification);
 router.delete('/:id', auth, deleteFlashNotification);
+// PUT /:id/showcase — marks this notification as the ONLY active one,
+// deactivating every other row in a single call. Wired to the
+// "Show only this one" button on each admin card.
+router.put('/:id/showcase', auth, showcaseFlashNotification);
 
 export default router;

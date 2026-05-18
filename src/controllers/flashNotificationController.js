@@ -138,3 +138,37 @@ export const deleteFlashNotification = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to delete flash notification' });
   }
 };
+
+// ─── Showcase / featured selector ────────────────────────────────────
+//
+// PUT /api/flash-notifications/:id/showcase
+//
+// Marks the picked notification as the ONLY currently-active one.
+// Deactivates every other row in a single transaction so the customer
+// app's `/active` response returns just this one. Used by the admin
+// "Show only this one" button on each notification card.
+//
+// Useful when admin uploads a new festive offer and wants the old
+// one out of the carousel without having to toggle each row off
+// manually.
+export const showcaseFlashNotification = async (req, res) => {
+  try {
+    const row = await FlashNotification.findByPk(req.params.id);
+    if (!row) {
+      return res.status(404).json({ success: false, message: 'Flash notification not found' });
+    }
+    // Deactivate every other row first, then make sure THIS one is
+    // active. Two updates instead of a transaction is fine here —
+    // worst case mid-flight is "no active notification for a few
+    // ms" which the customer app handles gracefully (skips carousel).
+    await FlashNotification.update(
+      { is_active: false },
+      { where: { id: { [Op.ne]: row.id } } },
+    );
+    await row.update({ is_active: true });
+    res.json({ success: true, data: row });
+  } catch (error) {
+    console.error('showcaseFlashNotification error:', error?.message);
+    res.status(500).json({ success: false, message: 'Failed to set showcase notification' });
+  }
+};
