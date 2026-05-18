@@ -1,5 +1,6 @@
 import express from 'express';
 import auth from '../middleware/auth.js';
+import { uploadSingle } from '../middleware/upload.js';
 import {
   getActiveFlashNotifications,
   listFlashNotifications,
@@ -7,6 +8,7 @@ import {
   updateFlashNotification,
   deleteFlashNotification,
   showcaseFlashNotification,
+  uploadFlashNotificationImage,
 } from '../controllers/flashNotificationController.js';
 
 const router = express.Router();
@@ -30,5 +32,9 @@ router.delete('/:id', auth, deleteFlashNotification);
 // deactivating every other row in a single call. Wired to the
 // "Show only this one" button on each admin card.
 router.put('/:id/showcase', auth, showcaseFlashNotification);
+// POST /upload-image — multipart file upload. uploadSingle parses
+// `file` field, stores via Cloudinary (prod) or local disk (dev),
+// returns the public URL admin can paste into image_url.
+router.post('/upload-image', auth, uploadSingle, uploadFlashNotificationImage);
 
 export default router;

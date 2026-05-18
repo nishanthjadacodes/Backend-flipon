@@ -1,5 +1,6 @@
 import { Op } from 'sequelize';
 import { FlashNotification } from '../models/index.js';
+import { getStoredFileValue, getFileUrl } from '../middleware/upload.js';
 
 // ─── Public — customer app reads this on launch ──────────────────────
 //
@@ -151,6 +152,34 @@ export const deleteFlashNotification = async (req, res) => {
 // Useful when admin uploads a new festive offer and wants the old
 // one out of the carousel without having to toggle each row off
 // manually.
+// POST /api/flash-notifications/upload-image
+//
+// Multipart file upload — receives a single image file under the
+// "file" field, stores it via the shared upload middleware
+// (Cloudinary if CLOUDINARY_* env vars are set, else local disk
+// under /uploads), and returns the public URL the admin can paste
+// into the notification's image_url field.
+//
+// Powers the "Choose image file" button in the admin Flash
+// Notifications modal so admin can upload directly from their phone
+// instead of hunting for a hotlink-friendly online URL.
+export const uploadFlashNotificationImage = (req, res) => {
+  try {
+    if (!req.file) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'No file uploaded (expected field name: "file")' });
+    }
+    const stored = getStoredFileValue(req.file);
+    const url = getFileUrl(stored, 'flash-notifications', req);
+    console.log('[flash] image uploaded:', url);
+    res.status(201).json({ success: true, url });
+  } catch (error) {
+    console.error('uploadFlashNotificationImage error:', error?.message);
+    res.status(500).json({ success: false, message: 'Failed to upload image' });
+  }
+};
+
 export const showcaseFlashNotification = async (req, res) => {
   try {
     const row = await FlashNotification.findByPk(req.params.id);
