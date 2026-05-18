@@ -306,69 +306,74 @@ const createBooking = async (req, res) => {
       console.error('[referral] discount lookup failed (proceeding at full price):', refErr?.message);
     }
 
-    // Duplicate-booking guard. Block the second submission when the
-    // exact same customer is trying to rebook the exact same service
-    // for the exact same applicant at the exact same date/time/address
-    // for the same price. Common cause: customer taps "Pay" twice on a
-    // flaky connection, or re-submits the form after a back-nav, and
-    // we'd otherwise end up with two paid bookings for one job.
+    // Duplicate-booking guard — narrowed per product spec to JUST:
+    // same customer + same service + same applicant name (case-
+    // insensitive, trimmed). Everything else (date, time, address,
+    // mobile, amount, payment method) is allowed to differ — those
+    // aren't enough on their own to flag a duplicate.
     //
-    // Escape hatch: a DIFFERENT applicant_name is treated as a
-    // legitimate second booking (e.g. customer booking the same service
-    // for a family member). NULL applicant on both sides also counts
-    // as a match — neither booking specified an applicant.
+    // Examples:
+    //   • Customer books "Aadhaar Address Update" for "Ramesh" on
+    //     Monday → tries to book it again for "Ramesh" on Tuesday
+    //     (different date/address) → BLOCKED. The applicant already
+    //     has an active job for this service.
+    //   • Customer books "Aadhaar Address Update" for "Ramesh" → tries
+    //     to book the same service for "Sita" → ALLOWED. Different
+    //     applicant.
+    //   • Customer books for themselves (no applicant_name) → tries
+    //     again with no applicant_name → BLOCKED. Both treat NULL as
+    //     "the customer is the applicant".
     //
-    // We deliberately ignore cancelled / rejected rows so a customer
-    // who cancelled and wants to rebook can do so.
+    // Cancelled / rejected rows are excluded so a customer who
+    // cancelled can rebook freely.
     try {
+      const norm = (s) => (s || '').toString().trim().toLowerCase() || null;
       const candidates = await Booking.findAll({
         where: {
           customer_id: req.user.id,
           service_id: finalServiceId,
-          customer_mobile: finalMobile,
-          preferred_date,
-          preferred_time,
           status: { [Op.notIn]: ['cancelled', 'rejected'] },
         },
         attributes: [
-          'id', 'booking_number', 'applicant_name', 'price_quoted',
-          'service_address', 'status', 'created_at',
+          'id', 'booking_number', 'applicant_name', 'status', 'created_at',
         ],
         order: [['created_at', 'DESC']],
-        limit: 10,
+        limit: 20,
       });
-      const sameApplicant = (a, b) => {
-        const norm = (s) => (s || '').toString().trim().toLowerCase() || null;
-        return norm(a) === norm(b);
-      };
-      const sameAddress = (a, b) => {
-        const stable = (v) => {
-          if (!v) return '';
-          if (typeof v === 'string') return v.trim().toLowerCase();
-          try {
-            return JSON.stringify(v);
-          } catch (_) {
-            return '';
-          }
-        };
-        return stable(a) === stable(b);
-      };
-      const dupe = candidates.find((b) =>
-        Number(b.price_quoted || 0) === Number(priceQuoted || 0) &&
-        sameAddress(b.service_address, finalAddress) &&
-        sameApplicant(b.applicant_name, finalApplicantName),
+      const target = norm(finalApplicantName);
+      // Diagnostic — Render logs will show exactly what the guard
+      // saw. Useful when "why didn't it block?" comes up: the most
+      // common reason is that existing bookings have NULL
+      // applicant_name (created before the column shipped), so a new
+      // booking with an actual name doesn't match any candidate.
+      console.log(
+        `[dup-guard] customer=${req.user.id} service=${finalServiceId} ` +
+        `targetApplicant=${JSON.stringify(target)} candidates=${candidates.length}`,
       );
+      if (candidates.length > 0) {
+        console.log(
+          '[dup-guard] candidate applicants:',
+          candidates.map((b) => ({
+            id: String(b.id).slice(0, 8),
+            applicant: b.applicant_name,
+            normalised: norm(b.applicant_name),
+          })),
+        );
+      }
+      const dupe = candidates.find((b) => norm(b.applicant_name) === target);
       if (dupe) {
+        console.log('[dup-guard] BLOCKED — match on booking', dupe.id);
         return res.status(409).json({
           success: false,
           code: 'DUPLICATE_BOOKING',
-          message:
-            'A booking with the same service, date, time, address and applicant already exists. ' +
-            'Change the applicant name or modify the details to proceed.',
+          message: target
+            ? `A booking for "${finalApplicantName}" on this service already exists. Use a different applicant name to proceed.`
+            : 'You already have an active booking for this service. Use a different applicant name to book again.',
           existingBookingId: dupe.id,
           existingBookingNumber: dupe.booking_number,
         });
       }
+      console.log('[dup-guard] ALLOWED — no candidate matched applicant');
     } catch (dupErr) {
       // Don't block the booking on a guard query failure — log and
       // proceed. The race window is small and the worst case is one
