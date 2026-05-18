@@ -341,6 +341,21 @@ const createBooking = async (req, res) => {
         limit: 20,
       });
       const target = norm(finalApplicantName);
+      // Escape hatch — if the existing booking has been STUCK in
+      // 'pending' (no agent assigned, no movement) for more than 7
+      // days, treat it as abandoned and let the customer rebook the
+      // same service for the same applicant. Without this, a
+      // genuinely stalled booking would silently block the user
+      // forever. As soon as the booking progresses to assigned /
+      // accepted / documents_collected / etc., this escape hatch
+      // disappears so we still prevent duplicate active jobs.
+      const STUCK_PENDING_DAYS = 7;
+      const stuckCutoff = new Date(
+        Date.now() - STUCK_PENDING_DAYS * 24 * 60 * 60 * 1000,
+      );
+      const isStuckPending = (b) =>
+        b.status === 'pending' && new Date(b.created_at) < stuckCutoff;
+
       // Diagnostic — Render logs will show exactly what the guard
       // saw. Useful when "why didn't it block?" comes up: the most
       // common reason is that existing bookings have NULL
@@ -357,10 +372,14 @@ const createBooking = async (req, res) => {
             id: String(b.id).slice(0, 8),
             applicant: b.applicant_name,
             normalised: norm(b.applicant_name),
+            status: b.status,
+            stuck: isStuckPending(b),
           })),
         );
       }
-      const dupe = candidates.find((b) => norm(b.applicant_name) === target);
+      const dupe = candidates.find(
+        (b) => norm(b.applicant_name) === target && !isStuckPending(b),
+      );
       if (dupe) {
         console.log('[dup-guard] BLOCKED — match on booking', dupe.id);
         return res.status(409).json({
@@ -373,7 +392,10 @@ const createBooking = async (req, res) => {
           existingBookingNumber: dupe.booking_number,
         });
       }
-      console.log('[dup-guard] ALLOWED — no candidate matched applicant');
+      console.log(
+        '[dup-guard] ALLOWED — no candidate matched applicant ' +
+        '(or matched candidate is >7d stuck in pending)',
+      );
     } catch (dupErr) {
       // Don't block the booking on a guard query failure — log and
       // proceed. The race window is small and the worst case is one
