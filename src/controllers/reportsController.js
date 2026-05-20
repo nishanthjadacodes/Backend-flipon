@@ -93,7 +93,19 @@ export const operationalReport = async (req, res) => {
         [fn('DATE', col('created_at')), 'date'],
         'status',
         [fn('COUNT', col('id')), 'count'],
-        [fn('COALESCE', fn('SUM', col('final_price')), 0), 'revenue'],
+        // Revenue = money actually RECEIVED, so only paid bookings
+        // contribute to the rupee figure. The COUNT columns above
+        // still cover every booking (operational volume), but the
+        // `revenue` field is paid-only — this keeps the Last 7d /
+        // Last 30d cards consistent with the B2C-vs-B2B card and
+        // the revenue-split section, which are all paid-only too.
+        // A pending/unpaid booking hasn't generated revenue yet.
+        [
+          literal(
+            "COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN final_price ELSE 0 END), 0)",
+          ),
+          'revenue',
+        ],
       ],
       where: { created_at: { [Op.gte]: since } },
       group: [literal('DATE(created_at)'), 'status'],
