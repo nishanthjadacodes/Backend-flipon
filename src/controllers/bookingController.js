@@ -561,6 +561,22 @@ const createBooking = async (req, res) => {
             ).catch(() => {})
           ),
         );
+
+        // Drop an in-app inbox row for every rep too — same reliability
+        // reason as the admin fan-out above. The push may be throttled
+        // or the device token missing; the inbox banner is the
+        // dependable surface that tells the rep a job is waiting to be
+        // accepted. Without this, reps only ever got a transient push.
+        await Notification.notifyMany(
+          reps.map((r) => r.id),
+          {
+            type: 'booking.created',
+            title: 'New Job Available',
+            body: `${serviceName} for ${customerName}. Open Tasks to accept.`,
+            deep_link: { route: 'AgentTabs', params: { screen: 'Tasks' } },
+            metadata: { booking_id: booking.id, service_id: booking.service_id },
+          },
+        );
       } catch (notifyErr) {
         console.warn('[booking] post-create notify failed:', notifyErr?.message);
       }
