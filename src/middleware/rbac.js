@@ -21,9 +21,18 @@ export const isSuperAdmin = (req, res, next) => {
   next();
 };
 
+// Super Admin (owner / founder) has FULL control over every admin
+// resource — orders, agents, services, finance, B2B, everything. It is
+// never gated by any role list or permission key, and crucially is NOT
+// dependent on the admin_roles DB row being seeded correctly: a missing
+// or mis-seeded row could otherwise lock the owner out of their own
+// panel. So every gate below short-circuits to allow super_admin.
+const isSuperAdminRole = (req) => req?.user?.role === 'super_admin';
+
 // Require any of the given admin roles
 export const requireRoles = (...roles) => (req, res, next) => {
   if (!req.user) return res.status(401).json({ success: false, message: 'Authentication required' });
+  if (isSuperAdminRole(req)) return next();
   if (!roles.includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Insufficient role for this resource' });
   }
@@ -34,6 +43,7 @@ export const requireRoles = (...roles) => (req, res, next) => {
 export const requirePermission = (permissionKey) => async (req, res, next) => {
   try {
     if (!req.user) return res.status(401).json({ success: false, message: 'Authentication required' });
+    if (isSuperAdminRole(req)) return next();
     const perms = await loadPermissions(req.user.role);
     if (perms.includes('*') || perms.includes(permissionKey)) return next();
     return res.status(403).json({ success: false, message: `Missing permission: ${permissionKey}` });
@@ -47,6 +57,7 @@ export const requirePermission = (permissionKey) => async (req, res, next) => {
 export const requireAllPermissions = (...keys) => async (req, res, next) => {
   try {
     if (!req.user) return res.status(401).json({ success: false, message: 'Authentication required' });
+    if (isSuperAdminRole(req)) return next();
     const perms = await loadPermissions(req.user.role);
     if (perms.includes('*')) return next();
     const missing = keys.filter((k) => !perms.includes(k));
