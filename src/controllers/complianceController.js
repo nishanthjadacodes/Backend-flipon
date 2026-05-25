@@ -16,6 +16,7 @@ import {
   Service,
   CompanyProfile,
   User,
+  Notification,
   sequelize,
 } from '../models/index.js';
 import { uploadSingle, getStoredFileValue } from '../middleware/upload.js';
@@ -509,8 +510,16 @@ export const renewCompliance = async (req, res) => {
       assigned_admin_id: autoAssignedRep ? autoAssignedRep.id : null,
     });
 
-    // Push-notify the assigned rep so they call back immediately. Wrapped in
-    // try/catch — never fail the renewal if the push gateway is down.
+    // Customer-side fields used in the rep's notification body so the
+    // rep has everything needed to make the call without bouncing into
+    // the admin dashboard for context. Falls back gracefully if either
+    // field is null.
+    const customerName = req.user.name || 'A FliponeX customer';
+    const customerMobile = req.user.mobile || null;
+
+    // Push-notify the assigned rep so they call back immediately.
+    // Wrapped in try/catch — never fail the renewal if the push gateway
+    // is down.
     if (autoAssignedRep) {
       try {
         const { sendPushNotification } = await import('../services/notificationService.js');
@@ -528,11 +537,49 @@ export const renewCompliance = async (req, res) => {
       } catch (e) {
         console.warn('[compliance/renew] push to rep failed:', e?.message);
       }
+
+      // ALSO persist to Notification table so the lead survives a
+      // missed push (token expired, app reinstalled, OS throttled).
+      // The rep app's dashboard bell reads from /notifications/inbox
+      // and will surface this as soon as they open the app — they no
+      // longer have to remember the system-tray banner. Body includes
+      // the customer's name + mobile so the rep can call immediately
+      // without bouncing into the admin dashboard for context.
+      await Notification.notify({
+        user_id: autoAssignedRep.id,
+        type: 'compliance_renewal_lead',
+        title: '🔔 New Compliance Renewal Lead',
+        body: customerMobile
+          ? `${customerName} needs ${label} renewal. Call ${customerMobile} to schedule document pickup.`
+          : `${customerName} needs ${label} renewal. Open the enquiry to call and schedule pickup.`,
+        metadata: {
+          enquiry_id: enquiry.id,
+          compliance_type: doc.compliance_type,
+          customer_id: req.user.id,
+          customer_name: customerName,
+          customer_mobile: customerMobile,
+          label,
+        },
+      });
     }
 
     const repName = autoAssignedRep
       ? autoAssignedRep.name || 'Your assigned representative'
       : null;
+
+    // Customer-side confirmation in the inbox — so the success Alert
+    // they saw at click time has a persistent record they can revisit.
+    // Also lets them see "Mohammed has been assigned" the next time
+    // they open the app, in case they tapped past the Alert too fast.
+    await Notification.notify({
+      user_id: req.user.id,
+      type: 'compliance_renewal_confirmed',
+      title: '✅ Renewal Request Logged',
+      body: repName
+        ? `${repName} has been assigned and will call you shortly to schedule ${label} pickup.`
+        : `Your ${label} renewal request is queued — a FliponeX representative will reach out shortly to schedule pickup.`,
+      metadata: { enquiry_id: enquiry.id, label, assigned_rep_id: autoAssignedRep?.id || null },
+    });
 
     res.status(201).json({
       success: true,
