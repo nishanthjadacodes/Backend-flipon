@@ -6,7 +6,7 @@ import {
   guestLogin,
   agentGuestLogin,
 } from '../controllers/authController.js';
-import { adminLogin, me, changePassword } from '../controllers/adminAuthController.js';
+import { adminLogin, adminSignup, me, changePassword } from '../controllers/adminAuthController.js';
 import auth from '../middleware/auth.js';
 
 const router = express.Router();
@@ -30,6 +30,11 @@ router.post('/agent-guest-login', agentGuestLogin);
 
 // Admin email+password login (admin panel)
 router.post('/admin/login', adminLogin);
+// Admin self-signup — used by the dashboard's /signup page during
+// initial team onboarding so each admin can register themselves with
+// their role + email + password instead of needing the founder to
+// run a SQL bootstrap. Backend enforces one active admin per role.
+router.post('/admin/signup', adminSignup);
 router.get('/admin/me', auth, me);
 router.post('/admin/change-password', auth, changePassword);
 

@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { User, AdminRole } from '../models/index.js';
+import { User, AdminRole, Notification } from '../models/index.js';
 
 const ADMIN_ROLES = [
   'super_admin',
@@ -27,6 +27,193 @@ const sanitize = (user, permissions) => ({
   is_verified: user.is_verified,
   permissions: permissions || [],
 });
+
+// Pretty-print a role enum value for notification bodies.
+const prettyRole = (r) =>
+  String(r || '')
+    .split('_')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+
+// Bell-inbox notifications used by adminSignup. Both queries skip the
+// new admin themselves (so a freshly-signed-up super_admin doesn't get
+// pinged about their own signup) and silently no-op if nobody with the
+// super_admin role exists yet (first-ever signup case).
+const notifySuperAdminsOfNewAdmin = async ({ newAdmin }) => {
+  try {
+    const targets = await User.findAll({
+      where: { role: 'super_admin', is_active: true },
+      attributes: ['id'],
+    });
+    const ids = targets
+      .map((u) => u.id)
+      .filter((id) => id !== newAdmin.id);
+    if (ids.length === 0) return;
+    await Notification.notifyMany(ids, {
+      type: 'admin.created',
+      title: `🆕 New admin: ${newAdmin.name}`,
+      body:
+        `${newAdmin.name} just joined as ${prettyRole(newAdmin.role)}. ` +
+        `Email: ${newAdmin.email}${newAdmin.mobile ? ` · Mobile: ${newAdmin.mobile}` : ''}.`,
+      metadata: {
+        new_admin_id: newAdmin.id,
+        new_admin_name: newAdmin.name,
+        new_admin_email: newAdmin.email,
+        new_admin_role: newAdmin.role,
+      },
+    });
+  } catch (e) {
+    // Never block the signup flow on a notification failure.
+    console.warn('[adminSignup] new-admin notify failed:', e?.message);
+  }
+};
+
+const notifySuperAdminsOfJoinRequest = async ({
+  name, email, mobile, requestedRole, currentHolder,
+}) => {
+  try {
+    const targets = await User.findAll({
+      where: { role: 'super_admin', is_active: true },
+      attributes: ['id'],
+    });
+    if (targets.length === 0) return;
+    await Notification.notifyMany(
+      targets.map((u) => u.id),
+      {
+        type: 'admin.join_request',
+        title: `🔔 Admin signup request: ${name}`,
+        body:
+          `${name} (${email}${mobile ? `, ${mobile}` : ''}) tried to claim the ` +
+          `${prettyRole(requestedRole)} seat — currently held by ${currentHolder.name}. ` +
+          'Contact them, deactivate the current holder, or ignore.',
+        metadata: {
+          requester_name: name,
+          requester_email: email,
+          requester_mobile: mobile,
+          requested_role: requestedRole,
+          current_holder_id: currentHolder.id,
+          current_holder_name: currentHolder.name,
+          current_holder_email: currentHolder.email,
+        },
+      },
+    );
+  } catch (e) {
+    console.warn('[adminSignup] join-request notify failed:', e?.message);
+  }
+};
+
+// POST /api/auth/admin/signup
+//
+// Creates a brand-new admin account with one of the five predefined
+// roles (super_admin, operations_manager, b2b_admin, finance_admin,
+// customer_support). The signup page on the admin dashboard calls this
+// during initial team onboarding so each admin can self-register
+// instead of needing the founder to run a SQL bootstrap.
+//
+// Guards:
+//   • Role must be one of the 5 ADMIN_ROLES.
+//   • Email is unique — a duplicate signup attempt for the same email
+//     returns 409.
+//   • Per-role cap: each role can have only one active admin row. The
+//     business model defines exactly 5 admin seats; preventing multiple
+//     super_admins (etc.) keeps responsibility unambiguous. If you ever
+//     need to rotate a person out, deactivate them via Admin Controls —
+//     the slot frees up and the replacement can self-register.
+//   • Password ≥ 8 chars to match the change-password validator.
+//
+// Returns the same {token, user} envelope as adminLogin so the
+// frontend can drop the new admin straight onto the dashboard without
+// a second login round-trip.
+export const adminSignup = async (req, res) => {
+  try {
+    const { name, email, password, mobile, role } = req.body || {};
+
+    if (!name || !email || !password || !mobile || !role) {
+      return res.status(400).json({
+        success: false,
+        message: 'name, email, password, mobile and role are all required',
+      });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 8 characters',
+      });
+    }
+    if (!ADMIN_ROLES.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: `Role must be one of: ${ADMIN_ROLES.join(', ')}`,
+      });
+    }
+
+    const normalisedEmail = String(email).toLowerCase().trim();
+
+    // Email uniqueness — straightforward 409.
+    const existingEmail = await User.findByEmail(normalisedEmail);
+    if (existingEmail) {
+      return res.status(409).json({
+        success: false,
+        message: 'An account with this email already exists. Please sign in instead.',
+      });
+    }
+
+    // Per-role uniqueness. Only count active rows so a deactivated old
+    // teammate doesn't permanently block their seat.
+    const existingRole = await User.findOne({ where: { role, is_active: true } });
+    if (existingRole) {
+      // Tell every super_admin that someone tried to claim this taken
+      // seat — it's effectively a "join request" they can act on
+      // (call the person, deactivate the current holder, or politely
+      // decline). The notification body carries the requester's
+      // contact info so the super_admin doesn't have to dig anywhere.
+      await notifySuperAdminsOfJoinRequest({
+        name, email: normalisedEmail, mobile,
+        requestedRole: role, currentHolder: existingRole,
+      });
+      return res.status(409).json({
+        success: false,
+        message:
+          `The "${role}" seat is already filled. We've notified the Super Admin of your interest — ` +
+          'they will reach out shortly. Or pick a different role.',
+      });
+    }
+
+    const password_hash = await bcrypt.hash(password, 10);
+
+    const user = await User.create({
+      name,
+      email: normalisedEmail,
+      mobile,
+      role,
+      password_hash,
+      is_active: true,
+      is_verified: true,
+    });
+
+    // Heads-up to every super_admin (except the one who just signed up,
+    // if they self-registered as super_admin themselves) that a new
+    // teammate is on board. Lets them see new additions to the team in
+    // their bell inbox without having to poll the user list manually.
+    await notifySuperAdminsOfNewAdmin({ newAdmin: user });
+
+    const adminRole = await AdminRole.findOne({ where: { role_name: role } });
+    const permissions = adminRole
+      ? (Array.isArray(adminRole.permissions) ? adminRole.permissions : [])
+      : [];
+
+    const token = issueToken(user);
+    return res.status(201).json({
+      success: true,
+      token,
+      user: sanitize(user, permissions),
+      message: 'Account created. You are now signed in.',
+    });
+  } catch (err) {
+    console.error('adminSignup error:', err);
+    return res.status(500).json({ success: false, message: 'Signup failed — please try again.' });
+  }
+};
 
 export const adminLogin = async (req, res) => {
   try {
