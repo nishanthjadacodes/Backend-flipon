@@ -62,7 +62,12 @@ router.get('/reports/revenue', requirePermission(PERMISSIONS.REVENUE_VIEW), reve
 router.get('/reports/agents', requirePermission(PERMISSIONS.AGENT_VIEW), agentPerformance);
 router.get('/reports/service-demand', requirePermission(PERMISSIONS.REPORTS_VIEW), serviceDemand);
 router.get('/reports/zones', requirePermission(PERMISSIONS.REPORTS_VIEW), zoneDemand);
-router.get('/reports/pending-documentation', requirePermission(PERMISSIONS.DOCUMENT_VIEW), pendingDocumentation);
+// Pending Documentation Report — per PDF spec section 6, this is a
+// REPORT (summary list of stalled applications), not document handling.
+// Gate it by REPORTS_VIEW so every role with reports access
+// (operations_manager + finance_admin + super_admin) can see it.
+// DOCUMENT_VIEW still gates the actual document-file routes elsewhere.
+router.get('/reports/pending-documentation', requirePermission(PERMISSIONS.REPORTS_VIEW), pendingDocumentation);
 
 // Service management
 router.get('/services', requirePermission(PERMISSIONS.SERVICE_VIEW), getAllServices);
