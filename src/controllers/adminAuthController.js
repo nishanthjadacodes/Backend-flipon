@@ -148,6 +148,7 @@ export const adminSignup = async (req, res) => {
     }
 
     const normalisedEmail = String(email).toLowerCase().trim();
+    const normalisedMobile = String(mobile).trim();
 
     // Email uniqueness — straightforward 409.
     const existingEmail = await User.findByEmail(normalisedEmail);
@@ -155,6 +156,18 @@ export const adminSignup = async (req, res) => {
       return res.status(409).json({
         success: false,
         message: 'An account with this email already exists. Please sign in instead.',
+      });
+    }
+
+    // Mobile uniqueness — users.mobile is UNIQUE across customer/agent/admin
+    // roles, so without this check a collision surfaces as a generic 500.
+    const existingMobile = await User.findByMobile(normalisedMobile);
+    if (existingMobile) {
+      return res.status(409).json({
+        success: false,
+        message:
+          'This mobile number is already registered on the platform. ' +
+          'Use a different mobile, or contact ops to consolidate accounts.',
       });
     }
 
@@ -184,7 +197,7 @@ export const adminSignup = async (req, res) => {
     const user = await User.create({
       name,
       email: normalisedEmail,
-      mobile,
+      mobile: normalisedMobile,
       role,
       password_hash,
       is_active: true,
