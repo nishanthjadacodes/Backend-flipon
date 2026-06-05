@@ -126,6 +126,35 @@ const notifySuperAdminsOfJoinRequest = async ({
 // a second login round-trip.
 export const adminSignup = async (req, res) => {
   try {
+    // Day-1 emergency close: the route was previously open to the internet
+    // (no auth, no CORS restriction, no rate limit) so anyone scanning the
+    // API could claim an admin seat. In production we now require an
+    // ADMIN_SIGNUP_TOKEN env var to be set AND matched on the request,
+    // pending the proper invite flow. Local dev (NODE_ENV !== 'production')
+    // keeps the old open behavior so contributors can bootstrap without
+    // extra setup.
+    const inProduction = process.env.NODE_ENV === 'production';
+    const expectedToken = process.env.ADMIN_SIGNUP_TOKEN;
+    if (inProduction) {
+      if (!expectedToken) {
+        return res.status(410).json({
+          success: false,
+          message:
+            'Admin signup is closed. Ask your Super Admin to invite you.',
+        });
+      }
+      const providedToken =
+        (req.body && req.body.signup_token) ||
+        req.headers['x-signup-token'];
+      if (providedToken !== expectedToken) {
+        return res.status(403).json({
+          success: false,
+          message:
+            'Admin signup requires an invite token from your Super Admin.',
+        });
+      }
+    }
+
     const { name, email, password, mobile, role } = req.body || {};
 
     if (!name || !email || !password || !mobile || !role) {
@@ -171,26 +200,14 @@ export const adminSignup = async (req, res) => {
       });
     }
 
-    // Per-role uniqueness. Only count active rows so a deactivated old
-    // teammate doesn't permanently block their seat.
-    const existingRole = await User.findOne({ where: { role, is_active: true } });
-    if (existingRole) {
-      // Tell every super_admin that someone tried to claim this taken
-      // seat — it's effectively a "join request" they can act on
-      // (call the person, deactivate the current holder, or politely
-      // decline). The notification body carries the requester's
-      // contact info so the super_admin doesn't have to dig anywhere.
-      await notifySuperAdminsOfJoinRequest({
-        name, email: normalisedEmail, mobile,
-        requestedRole: role, currentHolder: existingRole,
-      });
-      return res.status(409).json({
-        success: false,
-        message:
-          `The "${role}" seat is already filled. We've notified the Super Admin of your interest — ` +
-          'they will reach out shortly. Or pick a different role.',
-      });
-    }
+    // Per-role uniqueness was previously enforced here (one active admin
+    // per role with a "join request" notification on collision). Removed
+    // with the Day-1 close because (a) it blocked legitimate shift
+    // coverage — a sick customer_support agent meant nobody could log
+    // in — and (b) the new invite flow makes the super_admin the
+    // gatekeeper, so a "join request" is no longer the right primitive.
+    // notifySuperAdminsOfJoinRequest is kept defined for now but is
+    // unused; cleanup lands with the proper invite endpoint PR.
 
     const password_hash = await bcrypt.hash(password, 10);
 
