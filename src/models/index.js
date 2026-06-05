@@ -20,6 +20,7 @@ import TicketMessage from './TicketMessage.js';
 import WalletTransaction from './WalletTransaction.js';
 import Notification from './Notification.js';
 import FlashNotification from './FlashNotification.js';
+import AdminInvite from './AdminInvite.js';
 
 // Define associations
 User.hasMany(Booking, { foreignKey: 'customer_id', as: 'customerBookings' });
@@ -162,6 +163,7 @@ export {
   WalletTransaction,
   Notification,
   FlashNotification,
+  AdminInvite,
   sequelize,
   syncModels
 };

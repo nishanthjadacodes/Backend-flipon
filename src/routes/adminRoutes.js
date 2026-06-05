@@ -41,6 +41,9 @@ import {
   listAdmins, createAdmin, updateAdmin, deactivateAdmin,
   forfeitRoyaltyForQuarter, clearRoyaltyForfeit, terminateForSelfReferral,
 } from '../controllers/adminUsersController.js';
+import {
+  createInvite, listInvites, revokeInvite,
+} from '../controllers/adminInviteController.js';
 import { bulkUploadMiddleware, bulkAgents, bulkServices, bulkB2BCustomers } from '../controllers/bulkUploadController.js';
 import auth from '../middleware/auth.js';
 import { requirePermission, requireRoles } from '../middleware/rbac.js';
@@ -89,6 +92,13 @@ router.post('/users/:id/terminate-self-referral', requirePermission(PERMISSIONS.
 // Admin user CRUD (Super Admin only)
 router.get('/admins', requirePermission(PERMISSIONS.USER_VIEW), listAdmins);
 router.post('/admins', requirePermission(PERMISSIONS.USER_CREATE), createAdmin);
+// Invite collection routes — declared BEFORE /admins/:id so Express
+// doesn't match "invites" as the :id param. Same permission gates as
+// the create-admin path: USER_CREATE to issue, USER_VIEW to list,
+// USER_DEACTIVATE to revoke a pending invite.
+router.post('/admins/invites', requirePermission(PERMISSIONS.USER_CREATE), createInvite);
+router.get('/admins/invites', requirePermission(PERMISSIONS.USER_VIEW), listInvites);
+router.delete('/admins/invites/:id', requirePermission(PERMISSIONS.USER_DEACTIVATE), revokeInvite);
 router.put('/admins/:id', requirePermission(PERMISSIONS.USER_EDIT), updateAdmin);
 router.delete('/admins/:id', requirePermission(PERMISSIONS.USER_DEACTIVATE), deactivateAdmin);
 

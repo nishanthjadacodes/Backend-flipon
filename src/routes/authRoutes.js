@@ -7,6 +7,7 @@ import {
   agentGuestLogin,
 } from '../controllers/authController.js';
 import { adminLogin, adminSignup, me, changePassword } from '../controllers/adminAuthController.js';
+import { getInviteByToken, acceptInvite } from '../controllers/adminInviteController.js';
 import auth from '../middleware/auth.js';
 
 const router = express.Router();
@@ -35,6 +36,13 @@ router.post('/admin/login', adminLogin);
 // their role + email + password instead of needing the founder to
 // run a SQL bootstrap. Backend enforces one active admin per role.
 router.post('/admin/signup', adminSignup);
+// Admin invite acceptance — public because the token IS the auth. The
+// dashboard's /accept-invite page calls GET first to validate + pre-fill
+// the email/role, then POSTs the new password to complete onboarding.
+// Both endpoints return 410 Gone (without confirming token validity)
+// when the token is unknown, expired, or already used.
+router.get('/admin/invite/:token', getInviteByToken);
+router.post('/admin/accept-invite', acceptInvite);
 router.get('/admin/me', auth, me);
 router.post('/admin/change-password', auth, changePassword);
 

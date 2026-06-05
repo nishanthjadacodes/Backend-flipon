@@ -230,6 +230,26 @@ const MIGRATIONS = [
     label: 'vault_documents.issue_date',
     sql: 'ALTER TABLE vault_documents ADD COLUMN issue_date DATE NULL',
   },
+  // Admin invite tokens — replaces the open /admin/signup endpoint with
+  // a super-admin-issued, single-use, time-bounded invite link. See the
+  // AdminInvite model for the security model and column meanings.
+  {
+    label: 'admin_invites (table)',
+    sql:
+      'CREATE TABLE IF NOT EXISTS admin_invites (' +
+      'id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, ' +
+      'email VARCHAR(150) NOT NULL, ' +
+      'role VARCHAR(40) NOT NULL, ' +
+      'token_hash VARCHAR(64) NOT NULL, ' +
+      'invited_by CHAR(36) NULL, ' +
+      'expires_at DATETIME NOT NULL, ' +
+      'accepted_at DATETIME NULL, ' +
+      'created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, ' +
+      'UNIQUE KEY admin_invites_token_hash_idx (token_hash), ' +
+      'KEY admin_invites_email_status_idx (email, accepted_at), ' +
+      'KEY admin_invites_expires_idx (expires_at)' +
+      ')',
+  },
 ];
 
 // Probe a table once for its current column list — much faster than
