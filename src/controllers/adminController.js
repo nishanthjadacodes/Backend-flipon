@@ -277,6 +277,14 @@ const getAllUsers = async (req, res) => {
     if (status === 'inactive') where.is_active = false;
     if (kyc === 'verified') where.is_kyc_verified = true;
     if (kyc === 'pending') where.is_kyc_verified = false;
+
+    // b2b_admin scope — per PDF spec, they have NO access to consumer
+    // customer data. Force role=agent regardless of any role filter
+    // they pass, so the assign-agent dropdown still works but
+    // /admin/users?role=customer can't be used to enumerate consumers.
+    if (req.user?.role === 'b2b_admin') {
+      where.role = 'agent';
+    }
     if (search) {
       const { Op } = await import('sequelize');
       where[Op.or] = [
@@ -407,6 +415,16 @@ const getAllBookings = async (req, res) => {
     if (customer_id) whereClause.customer_id = customer_id;
     if (agent_id) whereClause.agent_id = agent_id;
 
+    // b2b_admin scope — server-side enforcement that they only ever see
+    // industrial bookings, regardless of what booking_type they pass in
+    // the query. The frontend (OrderManagement.tsx) already filters with
+    // booking_type=industrial via SCOPE_B2B_ONLY, but this closes the
+    // hole where dropping the filter from a manual API call would leak
+    // consumer data. Other roles flow through unchanged.
+    if (req.user?.role === 'b2b_admin') {
+      whereClause.booking_type = 'industrial';
+    }
+
     const bookings = await Booking.findAndCountAll({
       where: whereClause,
       include: [
@@ -467,6 +485,15 @@ const assignAgent = async (req, res) => {
         success: false,
         message: 'Booking not found'
       });
+    }
+
+    // b2b_admin scope — they can only assign agents to industrial
+    // bookings. A targeted call against a consumer booking ID by a
+    // b2b_admin would otherwise succeed since BOOKING_ASSIGN is
+    // granted to them. 404 (not 403) on purpose: don't leak that the
+    // booking exists at all.
+    if (req.user?.role === 'b2b_admin' && booking.booking_type !== 'industrial') {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
     if (booking.status !== 'pending') {
@@ -578,6 +605,10 @@ const rescheduleBooking = async (req, res) => {
 
     const booking = await Booking.findByPk(id);
     if (!booking) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+    // b2b_admin scope — same rationale as assignAgent. Industrial only.
+    if (req.user?.role === 'b2b_admin' && booking.booking_type !== 'industrial') {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
     if (['completed', 'cancelled'].includes(booking.status)) {

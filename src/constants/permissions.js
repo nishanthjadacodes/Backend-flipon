@@ -92,11 +92,16 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.REPORTS_VIEW,
   ],
 
-  // B2B / Industrial Admin: B2B pipeline, document vault, B2B-only reports.
-  // Restriction per spec: NO access to B2C customer data or B2C bookings,
-  // NO field-agent management. BOOKING_VIEW / AGENT_VIEW are intentionally
-  // absent — admin routes that check those perms will reject b2b_admin.
-  // For industrial work, they use B2B_PIPELINE (enquiries, stages) instead.
+  // B2B / Industrial Admin: B2B pipeline, document vault, B2B-only reports
+  // PLUS Order Management for industrial bookings only.
+  //
+  // Restriction per spec: NO access to B2C customer data or B2C bookings.
+  // The grants below (BOOKING_VIEW, BOOKING_ASSIGN, BOOKING_RESCHEDULE,
+  // USER_VIEW) unlock the Order Management section on the frontend, but
+  // adminController.js enforces booking_type='industrial' and role='agent'
+  // server-side for any request where req.user.role === 'b2b_admin' — so
+  // dropping the frontend booking_type=industrial filter from the query
+  // string doesn't leak consumer bookings or consumer customer rows.
   b2b_admin: [
     PERMISSIONS.DASHBOARD_VIEW,
     PERMISSIONS.B2B_PIPELINE,
@@ -104,6 +109,14 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.DOCUMENT_VAULT,
     PERMISSIONS.SERVICE_VIEW,
     PERMISSIONS.REPORTS_B2B,
+    // Order Management — scoped to industrial bookings only by the
+    // server-side scope checks described above.
+    PERMISSIONS.BOOKING_VIEW,
+    PERMISSIONS.BOOKING_ASSIGN,
+    PERMISSIONS.BOOKING_RESCHEDULE,
+    // USER_VIEW grants /admin/users — needed so the assign-agent
+    // dropdown can load active reps. Scoped to role=agent for b2b_admin.
+    PERMISSIONS.USER_VIEW,
   ],
 
   // Finance & Accounts Admin: revenue reports, royalty approval, wallet/payout.
