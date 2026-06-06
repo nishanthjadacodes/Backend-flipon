@@ -27,7 +27,10 @@ const steps = [
   'migrateEnquirySchema.js',      // enquiries table
   // 2. Seeds (data)
   'seedAdminRoles.js',
-  'seedSuperAdmin.js',
+  // seedSuperAdmin.js was removed — it created a row with no email/password
+  // that the current email+password login flow can't authenticate.
+  // Bootstrap the first Super Admin via scripts/create-admin.js instead.
+  // See README.md → "First-time setup" for the exact command.
   'seedAllServicesSQL.js',        // baseline consumer services
   'seedIndustrialServices.js',    // 37 industrial (quote) services
 ];
