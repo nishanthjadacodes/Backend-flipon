@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { User } from '../models/index.js';
 
 // Dev / admin-panel-open mode: when ADMIN_DEV_OPEN=true is set in the Render
 // environment, requests that arrive without a JWT are treated as if they came
@@ -16,7 +17,25 @@ const SYNTHETIC_SUPER_ADMIN = Object.freeze({
   name: 'Dev Open (ADMIN_DEV_OPEN)',
 });
 
-const auth = (req, res, next) => {
+// 30-second cache of {userId -> is_active}. Without it, every authenticated
+// request would do a User.findByPk just to check the deactivation flag —
+// fine on a free-tier dashboard but wasteful at scale. 30s is short enough
+// that a Super Admin's "Deactivate" click in Team takes effect within
+// half a minute on the target's next request.
+const activeCache = new Map(); // userId -> { active: boolean, at: number }
+const ACTIVE_TTL_MS = 30 * 1000;
+
+const isUserActive = async (userId) => {
+  if (userId == null || userId === 0) return true; // synthetic super admin
+  const cached = activeCache.get(userId);
+  if (cached && Date.now() - cached.at < ACTIVE_TTL_MS) return cached.active;
+  const row = await User.findByPk(userId, { attributes: ['id', 'is_active'] });
+  const active = !!(row && row.is_active);
+  activeCache.set(userId, { active, at: Date.now() });
+  return active;
+};
+
+const auth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -33,6 +52,21 @@ const auth = (req, res, next) => {
 
     const token = authHeader.substring(7);
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Live re-check of the deactivation flag so a Super Admin's
+    // "Deactivate" click takes effect within ~30s on the target's next
+    // request — instead of waiting up to 30 days for the JWT to expire.
+    // The check is cached per user id so a chatty client doesn't hammer
+    // the DB. If the user was hard-deleted the JWT is rejected with the
+    // same 403 — "account no longer exists" leaks no extra info.
+    const active = await isUserActive(decoded.id);
+    if (!active) {
+      return res.status(403).json({
+        success: false,
+        message: 'Account has been deactivated. Contact your Super Admin.',
+      });
+    }
+
     req.user = decoded;
     next();
   } catch (error) {
@@ -54,6 +88,14 @@ const auth = (req, res, next) => {
       message: 'Authentication error',
     });
   }
+};
+
+// Allow controllers / Team UI to invalidate a specific user's active-cache
+// entry right after deactivation so the next request goes to DB
+// immediately instead of waiting for the 30s TTL. Optional integration —
+// the cache is correct either way, this just trims the window.
+export const invalidateActiveCacheFor = (userId) => {
+  if (userId != null) activeCache.delete(userId);
 };
 
 export default auth;

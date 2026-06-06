@@ -320,6 +320,13 @@ export const acceptInvite = async (req, res) => {
     // possible.
     await invite.update({ accepted_at: new Date() });
 
+    // Stamp last_login_at so the Team page shows "active just now"
+    // instead of "—" right after the new admin lands on the dashboard.
+    // Mirrors the same fire-and-forget pattern adminLogin uses.
+    user.update({ last_login_at: new Date() }).catch((e) =>
+      console.warn('[acceptInvite] last_login_at stamp failed:', e?.message),
+    );
+
     await AuditLog.record({
       actor: { id: invite.invited_by },
       action: 'admin.invite.accept',
