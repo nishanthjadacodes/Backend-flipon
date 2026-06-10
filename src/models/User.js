@@ -170,6 +170,14 @@ const User = sequelize.define('User', {
     type: DataTypes.DATE,
     allowNull: true,
   },
+  // Free-text postal address captured on first-time customer signup
+  // (name, email, address are entered between mobile + OTP). Optional
+  // because rep accounts and existing customers may never see the
+  // signup form.
+  address: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
   created_at: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW

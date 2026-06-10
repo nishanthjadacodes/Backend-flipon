@@ -60,6 +60,13 @@ const MIGRATIONS = [
     label: 'users.otp_expires_at',
     sql: 'ALTER TABLE users ADD COLUMN otp_expires_at DATETIME NULL',
   },
+  // First-time customer signup: name + email already existed; this stores
+  // the postal address the user types into the signup form between
+  // mobile entry and OTP verification.
+  {
+    label: 'users.address',
+    sql: 'ALTER TABLE users ADD COLUMN address TEXT NULL',
+  },
   {
     // Rep online-status heartbeat. Stamped on every PUT /profile/online-status
     // call (agent app heartbeats every 30s while online). Admin's

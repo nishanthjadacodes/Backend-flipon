@@ -7,88 +7,13 @@ import {
   isValidPhoneNumber,
   getPhoneLookupVariants,
 } from '../utils/phone.js';
-
-const FAST2SMS_ENDPOINT = 'https://www.fast2sms.com/dev/bulkV2';
-
-// Second variable in the DLT template — the registered text reads
-// "Your OTP for {businessName} is {OTP}" so the value here must match
-// what was approved on the DLT portal.
-const BUSINESS_NAME = 'FliponeX';
+import { sendOtpSms } from '../services/smsService.js';
 
 // Review credentials shared by the customer + rep apps for Play Store
 // review. The bypass never hits Fast2SMS — the OTP is always REVIEW_OTP
 // and the SMS step is skipped entirely.
 const REVIEW_MOBILE = '9999999999';
 const REVIEW_OTP = '1234';
-
-// Send a DLT-approved OTP SMS via Fast2SMS.
-//
-// Easy-to-get-wrong details that the spec calls out:
-//   - GET request with all params in the query string (not a JSON body).
-//   - `message` is the numeric DLT template ID, NOT literal text.
-//   - `variables_values` is pipe-separated, in the exact order the DLT
-//     template defines: {OTP}|{businessName}.
-//   - `numbers` is a bare 10-digit number, no +91.
-//   - Read response.text() first, then JSON.parse — Fast2SMS sometimes
-//     returns non-JSON on errors.
-const sendOtpSms = async ({ otpCode, phone }) => {
-  const apiKey = process.env.FAST2SMS_API_KEY?.trim();
-  const route = process.env.FAST2SMS_ROUTE?.trim() || 'dlt';
-  const senderId = process.env.FAST2SMS_SENDER_ID?.trim();
-  const templateId = process.env.FAST2SMS_TEMPLATE_ID?.trim();
-
-  if (!apiKey) {
-    return { success: false, error: 'FAST2SMS_API_KEY is not configured.' };
-  }
-  if (!senderId || !templateId) {
-    return { success: false, error: 'FAST2SMS sender/template configuration is incomplete.' };
-  }
-
-  try {
-    const url = new URL(FAST2SMS_ENDPOINT);
-    url.searchParams.set('authorization', apiKey);
-    url.searchParams.set('route', route);
-    url.searchParams.set('sender_id', senderId);
-    url.searchParams.set('message', templateId);
-    url.searchParams.set('variables_values', `${otpCode}|${BUSINESS_NAME}`);
-    url.searchParams.set('numbers', phone);
-    url.searchParams.set('flash', '0');
-
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-    });
-
-    const rawResponse = await response.text();
-    let providerResponse = rawResponse;
-    try {
-      providerResponse = rawResponse ? JSON.parse(rawResponse) : null;
-    } catch {
-      /* Fast2SMS returns non-JSON on some errors — keep the raw string. */
-    }
-
-    if (!response.ok) {
-      console.error('[FAST2SMS_OTP_SEND_FAILED]', {
-        status: response.status,
-        phone,
-        response: providerResponse,
-      });
-      return {
-        success: false,
-        error: 'SMS provider rejected the OTP request.',
-        providerResponse,
-      };
-    }
-
-    return { success: true, providerResponse };
-  } catch (error) {
-    console.error('[FAST2SMS_OTP_SEND_ERROR]', {
-      phone,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    });
-    return { success: false, error: 'Unable to reach the SMS provider right now.' };
-  }
-};
 
 // OTP delivery provider — explicit env var so we don't rely on NODE_ENV.
 //   OTP_PROVIDER=hardcoded  (default) — no SMS, return OTP in response.
@@ -143,6 +68,11 @@ const sendOTP = async (req, res) => {
     } else {
       await user.update({ otp_code: otp, otp_expires_at: otpExpiresAt });
     }
+    // The customer app's signup form is gated on this flag. `is_verified
+    // === false` is the "never completed OTP" marker — the stub-created
+    // row above starts that way, and any returning customer who has
+    // logged in at least once has it flipped to true.
+    const isNewUser = !user.is_verified;
 
     const provider = otpProvider();
     let providerResponse;
@@ -179,6 +109,7 @@ const sendOTP = async (req, res) => {
           ? 'OTP sent successfully'
           : `Dev OTP (provider=${provider}): ${otp}`,
       expiresInMinutes: 30,
+      isNewUser,
       ...(includeDevOtp ? { devOtp: otp, otp } : {}),
       ...(providerResponse ? { providerResponse } : {}),
     });
@@ -214,13 +145,43 @@ const verifyOTP = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    // Success — clear the code so it can't be reused, flip verified, stamp login.
-    await user.update({
+    // First-time signup fields. The customer app sends these alongside
+    // the OTP when the user is brand new — name, email, address get
+    // saved in the same atomic update as the verify itself. We only
+    // honour them on the FIRST-ever verify (is_verified still false)
+    // so a returning customer can't accidentally overwrite their saved
+    // name by sending fresh values from the signup form.
+    const updates = {
       otp_code: null,
       otp_expires_at: null,
       is_verified: true,
       last_login_at: new Date(),
-    });
+    };
+    if (!user.is_verified) {
+      const { name, email, address } = req.body || {};
+      if (typeof name === 'string' && name.trim()) updates.name = name.trim();
+      if (typeof email === 'string' && email.trim()) {
+        updates.email = email.trim().toLowerCase();
+      }
+      if (typeof address === 'string' && address.trim()) {
+        updates.address = address.trim();
+      }
+    }
+    // Success — clear the code so it can't be reused, flip verified, stamp login.
+    try {
+      await user.update(updates);
+    } catch (updateErr) {
+      // Most likely a unique-constraint violation on email (another
+      // user already registered it). Surface a clean message so the
+      // client can re-prompt without dropping the OTP gate.
+      if (updateErr?.name === 'SequelizeUniqueConstraintError') {
+        return res.status(400).json({
+          success: false,
+          message: 'That email is already linked to another account. Try a different one.',
+        });
+      }
+      throw updateErr;
+    }
 
     const token = jwt.sign(
       { id: user.id, mobile: user.mobile, role: user.role, name: user.name },

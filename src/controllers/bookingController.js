@@ -7,8 +7,10 @@ import {
   sendBookingNotification,
   sendPaymentNotification,
   sendDocumentNotification,
-  sendJobCompletionNotification
+  sendJobCompletionNotification,
+  sendCompletionOtpRequestNotification,
 } from '../services/notificationService.js';
+import { sendOtpSms } from '../services/smsService.js';
 import { creditWallet } from './walletController.js';
 
 // Refer & Earn policy enforcement — fires when a referee completes their
@@ -750,13 +752,10 @@ const getBookingDetails = async (req, res) => {
     }
 
     // Strip the completion OTP from the response unless the caller is the
-    // customer themselves OR the assigned rep — both legitimately need it
-    // to drive the dev-mode flow on the rep app. Admins don't need it via
-    // this endpoint.
-    if (
-      booking.customer_id !== req.user.id &&
-      booking.agent_id !== req.user.id
-    ) {
+    // customer themselves. The rep MUST NOT see it — the whole point of
+    // the OTP gate is that the customer shares it verbally to verify the
+    // rep is actually at the job. Admins don't need it via this endpoint.
+    if (booking.customer_id !== req.user.id) {
       delete responseBody.completion_otp;
       delete responseBody.completion_otp_generated_at;
     }
@@ -934,7 +933,11 @@ const updateJobStatus = async (req, res) => {
       if (submission_details) updates.submission_details = submission_details;
       updates.submitted_at = new Date();
       if (!booking.completion_otp) {
-        const completionOTP = generateOTP();
+        // 6-digit by deliberate override: completion OTPs aren't SMS'd,
+        // they're read off the customer's screen and spoken to the rep, so
+        // they're not bound to the login Fast2SMS template length. Existing
+        // bookings already in the DB have 6-digit codes — keep parity.
+        const completionOTP = generateOTP(6);
         updates.completion_otp = completionOTP;
         updates.completion_otp_generated_at = new Date();
         console.log(`Completion OTP for booking ${id}: ${completionOTP}`);
@@ -970,16 +973,17 @@ const updateJobStatus = async (req, res) => {
       }
     }
 
-    // Surface the completion OTP back to the rep so dev/demo flows work
-    // even when push/SMS delivery to the customer isn't configured. The
-    // assigned rep can see the code and complete the booking. This is
-    // intentionally returned only to the assigned rep (`booking.agent_id ===
-    // req.user.id` was already checked above, so we're safe).
+    // Never expose the completion OTP to the rep — the OTP only travels
+    // through the customer's phone. The rep asks the customer for it
+    // verbally and submits via /verify-completion. Strip from the
+    // response so a curious rep poking at the network tab can't lift it.
+    const repSafeBooking = booking.toJSON();
+    delete repSafeBooking.completion_otp;
+    delete repSafeBooking.completion_otp_generated_at;
     res.json({
       success: true,
-      data: booking,
-      completion_otp: booking.completion_otp || null,
-      message: `Job status updated to ${status} successfully`
+      data: repSafeBooking,
+      message: `Job status updated to ${status} successfully`,
     });
 
     // Emit WebSocket event for real-time job status updates
@@ -1000,8 +1004,47 @@ const updateJobStatus = async (req, res) => {
         timestamp: new Date()
       });
 
-      // Send push notification for job status changes
-      await sendJobCompletionNotification(booking.customer_id, id, status === 'completed' ? updates.completion_otp : null);
+      // Push the completion OTP to the customer the moment it's generated
+      // (rep just hit "Work Completed" / "Submitted"). The customer needs
+      // to see this BEFORE the rep can verify — they read it off this
+      // notification, the SMS, or BookingDetails and tell the rep verbally.
+      const otpForCustomer = updates.completion_otp || booking.completion_otp;
+      if ((status === 'work_completed' || status === 'submitted') && otpForCustomer) {
+        await sendCompletionOtpRequestNotification(
+          booking.customer_id,
+          id,
+          otpForCustomer,
+        );
+
+        // Also send a real SMS via Fast2SMS DLT — same template as login
+        // OTPs ("Your OTP for FliponeX is {OTP}"). The customer recognises
+        // the purpose from context (rep is standing in front of them
+        // asking). Fire-and-forget: SMS failure must not break the rep's
+        // status update, so we don't await its success/failure into the
+        // response. Only attempt when we have a usable customer mobile.
+        try {
+          const customer = await User.findByPk(booking.customer_id, {
+            attributes: ['mobile'],
+          });
+          const customerMobile = customer?.mobile;
+          if (customerMobile) {
+            const smsRes = await sendOtpSms({
+              otpCode: String(otpForCustomer),
+              phone: String(customerMobile).replace(/^\+?91/, ''),
+            });
+            if (!smsRes.success) {
+              console.log(
+                `[completion-otp] SMS send failed for booking ${id}: ${smsRes.error}`,
+              );
+            }
+          }
+        } catch (smsErr) {
+          console.log(
+            `[completion-otp] SMS send threw for booking ${id}:`,
+            smsErr?.message,
+          );
+        }
+      }
 
       // Send document upload notifications if documents are collected
       if (status === 'documents_collected') {
@@ -1013,9 +1056,11 @@ const updateJobStatus = async (req, res) => {
         await sendDocumentNotification(booking.customer_id, 'job_submitted', 'Your job has been submitted to the relevant authorities');
       }
 
-      // Send completion notification if job is completed
+      // Final "service completed" notice — fires after the rep has
+      // verified the OTP and the booking has actually transitioned to
+      // 'completed'. No OTP payload here; it's already been consumed.
       if (status === 'completed') {
-        await sendJobCompletionNotification(booking.customer_id, id, updates.completion_otp);
+        await sendJobCompletionNotification(booking.customer_id, id);
       }
     }
   } catch (error) {

@@ -215,19 +215,42 @@ export const sendDocumentNotification = async (userId, documentType, fileName) =
 };
 
 /**
- * Send job completion notifications
+ * Send the completion OTP to the customer when the rep finishes the work
+ * and is about to verify. The customer reads this OTP off their phone
+ * (push body or BookingDetails screen) and tells it to the rep, who
+ * enters it on their app to close the booking.
  */
-export const sendJobCompletionNotification = async (userId, bookingId, completionOTP) => {
+export const sendCompletionOtpRequestNotification = async (userId, bookingId, completionOTP) => {
   const notification = {
-    title: 'Job Completed',
-    body: `Your job for booking ${bookingId} has been completed. Completion OTP: ${completionOTP}`,
+    title: 'Share OTP with representative',
+    body: `Your service representative is closing your booking. Share this OTP: ${completionOTP}`,
+    data: {
+      type: 'completion_otp_request',
+      bookingId,
+      completionOTP,
+      action: 'share_otp_with_rep',
+    },
+    priority: 'high',
+  };
+
+  return await sendPushNotification(userId, notification);
+};
+
+/**
+ * Send the final "service completed" notification to the customer after
+ * the rep successfully verified the completion OTP. No OTP payload here —
+ * it's already been consumed and cleared.
+ */
+export const sendJobCompletionNotification = async (userId, bookingId) => {
+  const notification = {
+    title: 'Service completed',
+    body: `Your booking ${bookingId} has been marked as completed. Thanks for choosing FliponeX.`,
     data: {
       type: 'job_completion',
       bookingId,
-      completionOTP,
-      action: 'job_completed'
+      action: 'job_completed',
     },
-    priority: 'high'
+    priority: 'high',
   };
 
   return await sendPushNotification(userId, notification);
