@@ -49,6 +49,17 @@ const MIGRATIONS = [
     label: 'users.last_login_at',
     sql: 'ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL',
   },
+  // OTP login persistence — replaces the in-memory Map that vanished on
+  // every Render free-tier sleep. The customer + agent apps both write
+  // to these columns through /auth/send-otp and read them on /auth/verify-otp.
+  {
+    label: 'users.otp_code',
+    sql: 'ALTER TABLE users ADD COLUMN otp_code VARCHAR(6) NULL',
+  },
+  {
+    label: 'users.otp_expires_at',
+    sql: 'ALTER TABLE users ADD COLUMN otp_expires_at DATETIME NULL',
+  },
   {
     // Rep online-status heartbeat. Stamped on every PUT /profile/online-status
     // call (agent app heartbeats every 30s while online). Admin's

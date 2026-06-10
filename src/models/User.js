@@ -157,6 +157,19 @@ const User = sequelize.define('User', {
     type: DataTypes.DATE,
     allowNull: true,
   },
+  // 4-digit OTP login codes — persisted on the user row so a Render
+  // free-tier sleep doesn't lose pending codes (the previous in-memory
+  // Map would vanish on restart). Cleared on successful verifyOTP so a
+  // code can't be reused; the 30-minute expiry is enforced at the
+  // controller, not by a DB constraint.
+  otp_code: {
+    type: DataTypes.STRING(6),
+    allowNull: true,
+  },
+  otp_expires_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
   created_at: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW

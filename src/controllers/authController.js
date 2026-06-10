@@ -1,87 +1,186 @@
 import jwt from 'jsonwebtoken';
+import { Op } from 'sequelize';
 import { User } from '../models/index.js';
 import { generateOTP } from '../utils/otpGenerator.js';
+import {
+  normalizePhoneNumber,
+  isValidPhoneNumber,
+  getPhoneLookupVariants,
+} from '../utils/phone.js';
 
-// In-memory OTP store (use Redis in production)
-const otpStore = new Map();
+const FAST2SMS_ENDPOINT = 'https://www.fast2sms.com/dev/bulkV2';
 
-// Send real SMS via Fast2SMS
-const sendSMS = async (mobile, otp) => {
-  const apiKey = process.env.FAST2SMS_API_KEY;
-  if (!apiKey || apiKey === 'YOUR_FAST2SMS_API_KEY_HERE') {
-    console.log('[SMS] No Fast2SMS key configured — OTP logged to console only');
-    return false;
+// Second variable in the DLT template — the registered text reads
+// "Your OTP for {businessName} is {OTP}" so the value here must match
+// what was approved on the DLT portal.
+const BUSINESS_NAME = 'FliponeX';
+
+// Review credentials shared by the customer + rep apps for Play Store
+// review. The bypass never hits Fast2SMS — the OTP is always REVIEW_OTP
+// and the SMS step is skipped entirely.
+const REVIEW_MOBILE = '9999999999';
+const REVIEW_OTP = '1234';
+
+// Send a DLT-approved OTP SMS via Fast2SMS.
+//
+// Easy-to-get-wrong details that the spec calls out:
+//   - GET request with all params in the query string (not a JSON body).
+//   - `message` is the numeric DLT template ID, NOT literal text.
+//   - `variables_values` is pipe-separated, in the exact order the DLT
+//     template defines: {OTP}|{businessName}.
+//   - `numbers` is a bare 10-digit number, no +91.
+//   - Read response.text() first, then JSON.parse — Fast2SMS sometimes
+//     returns non-JSON on errors.
+const sendOtpSms = async ({ otpCode, phone }) => {
+  const apiKey = process.env.FAST2SMS_API_KEY?.trim();
+  const route = process.env.FAST2SMS_ROUTE?.trim() || 'dlt';
+  const senderId = process.env.FAST2SMS_SENDER_ID?.trim();
+  const templateId = process.env.FAST2SMS_TEMPLATE_ID?.trim();
+
+  if (!apiKey) {
+    return { success: false, error: 'FAST2SMS_API_KEY is not configured.' };
+  }
+  if (!senderId || !templateId) {
+    return { success: false, error: 'FAST2SMS sender/template configuration is incomplete.' };
   }
 
   try {
-    const response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
-      method: 'POST',
-      headers: {
-        authorization: apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        route: 'otp',
-        variables_values: otp,
-        numbers: mobile,
-        flash: 0,
-      }),
+    const url = new URL(FAST2SMS_ENDPOINT);
+    url.searchParams.set('authorization', apiKey);
+    url.searchParams.set('route', route);
+    url.searchParams.set('sender_id', senderId);
+    url.searchParams.set('message', templateId);
+    url.searchParams.set('variables_values', `${otpCode}|${BUSINESS_NAME}`);
+    url.searchParams.set('numbers', phone);
+    url.searchParams.set('flash', '0');
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
     });
-    const data = await response.json();
-    console.log(`[SMS] Fast2SMS response:`, data);
-    return data.return === true;
+
+    const rawResponse = await response.text();
+    let providerResponse = rawResponse;
+    try {
+      providerResponse = rawResponse ? JSON.parse(rawResponse) : null;
+    } catch {
+      /* Fast2SMS returns non-JSON on some errors — keep the raw string. */
+    }
+
+    if (!response.ok) {
+      console.error('[FAST2SMS_OTP_SEND_FAILED]', {
+        status: response.status,
+        phone,
+        response: providerResponse,
+      });
+      return {
+        success: false,
+        error: 'SMS provider rejected the OTP request.',
+        providerResponse,
+      };
+    }
+
+    return { success: true, providerResponse };
   } catch (error) {
-    console.error('[SMS] Fast2SMS error:', error.message);
-    return false;
+    console.error('[FAST2SMS_OTP_SEND_ERROR]', {
+      phone,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return { success: false, error: 'Unable to reach the SMS provider right now.' };
   }
 };
 
-// OTP delivery provider — explicit env var so we don't rely on NODE_ENV
-// (Render sets NODE_ENV=production by default, which silently disabled
-// the dev banner even on internal/staging deploys).
-//
+// OTP delivery provider — explicit env var so we don't rely on NODE_ENV.
 //   OTP_PROVIDER=hardcoded  (default) — no SMS, return OTP in response.
-//                                       Free; perfect for internal testing.
-//   OTP_PROVIDER=fast2sms             — real SMS via Fast2SMS, OTP not returned.
-//                                       Requires FAST2SMS_API_KEY.
-//   OTP_PROVIDER=whatsapp             — placeholder for Meta Cloud API.
+//                                       Free; for internal testing.
+//   OTP_PROVIDER=fast2sms             — real SMS via Fast2SMS DLT route.
+//                                       Requires the four FAST2SMS_* env vars.
 const otpProvider = () =>
   String(process.env.OTP_PROVIDER || 'hardcoded').toLowerCase();
 
+// Legacy data may have been stored with or without the country code.
+// Try all the forms when looking a user up; new sign-ups normalize on
+// write so the variant set collapses to one entry over time.
+const findUserByPhoneVariants = async (phone) => {
+  const variants = getPhoneLookupVariants(phone);
+  if (!variants.length) return null;
+  return await User.findOne({ where: { mobile: { [Op.in]: variants } } });
+};
+
 const sendOTP = async (req, res) => {
   try {
-    const { mobile } = req.body;
-    if (!mobile) {
+    const rawMobile = req.body?.mobile;
+    if (!rawMobile) {
       return res.status(400).json({ success: false, message: 'Mobile number is required' });
     }
+    if (!isValidPhoneNumber(rawMobile)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter a valid 10-digit Indian mobile number.',
+      });
+    }
 
-    const otp = generateOTP();
-    otpStore.set(mobile, { otp, createdAt: Date.now() });
+    const mobile = normalizePhoneNumber(rawMobile);
+    const role = req.body?.role || 'customer';
+    const isBypass = mobile === REVIEW_MOBILE;
+    const otp = isBypass ? REVIEW_OTP : generateOTP();
+    const otpExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+    // Persist BEFORE sending the SMS so a successful provider response
+    // can't race a failed DB write. Stub-create first-time numbers as
+    // unverified; verifyOTP flips is_verified once the code matches.
+    let user = await findUserByPhoneVariants(mobile);
+    if (!user) {
+      user = await User.create({
+        mobile,
+        name: `User_${mobile.slice(-4)}`,
+        role,
+        is_verified: false,
+        is_active: true,
+        otp_code: otp,
+        otp_expires_at: otpExpiresAt,
+      });
+    } else {
+      await user.update({ otp_code: otp, otp_expires_at: otpExpiresAt });
+    }
 
     const provider = otpProvider();
-    let smsSent = false;
-    if (provider === 'fast2sms') {
-      smsSent = await sendSMS(mobile, otp);
+    let providerResponse;
+    if (!isBypass && provider === 'fast2sms') {
+      const result = await sendOtpSms({ otpCode: otp, phone: mobile });
+      if (!result.success) {
+        // Don't pretend it sent. 502 so the client can retry instead of
+        // sitting on a "waiting for OTP" screen forever.
+        return res.status(502).json({
+          success: false,
+          message: result.error,
+          providerResponse: result.providerResponse,
+        });
+      }
+      providerResponse = result.providerResponse;
     }
-    console.log(`[OTP] mobile=${mobile} otp=${otp} provider=${provider} sent=${smsSent}`);
+    console.log(`[OTP] mobile=${mobile} otp=${otp} provider=${provider} bypass=${isBypass}`);
 
-    // The dev banner is gated on whether we sent the OTP via a real
-    // channel. With provider=hardcoded we always return the code so the
-    // app can show / autofill it. With provider=fast2sms we return the
-    // code only as a fallback when the SMS gateway failed (so the rep
-    // isn't locked out by a transient outage), and only on non-prod.
-    const returnOtp =
+    // Return the OTP in the response only when we know we DIDN'T send it
+    // via a real channel — bypass numbers always, hardcoded provider always,
+    // and fast2sms only on non-production deploys (so staging can still
+    // read the code from the response for automated tests).
+    const isProduction = process.env.NODE_ENV === 'production';
+    const includeDevOtp =
+      isBypass ||
       provider === 'hardcoded' ||
-      (!smsSent && process.env.NODE_ENV !== 'production');
+      (provider === 'fast2sms' && !isProduction);
 
     res.json({
       success: true,
-      message: smsSent
-        ? `OTP sent to +91${mobile}`
-        : returnOtp
-          ? `Dev OTP (provider=${provider}): ${otp}`
-          : 'OTP sent successfully',
-      ...(returnOtp ? { devOtp: otp, otp } : {}),
+      message: isBypass
+        ? `Bypass OTP for review account: ${otp}`
+        : provider === 'fast2sms' && isProduction
+          ? 'OTP sent successfully'
+          : `Dev OTP (provider=${provider}): ${otp}`,
+      expiresInMinutes: 30,
+      ...(includeDevOtp ? { devOtp: otp, otp } : {}),
+      ...(providerResponse ? { providerResponse } : {}),
     });
   } catch (error) {
     console.error('Error sending OTP:', error);
@@ -91,56 +190,43 @@ const sendOTP = async (req, res) => {
 
 const verifyOTP = async (req, res) => {
   try {
-    // Default to 'customer' — much safer than 'agent' as the global
-    // fallback. Reps go through their own app surface which always
-    // passes role='agent' explicitly. A request without a role from any
-    // unknown surface most likely belongs to a customer.
-    const { mobile, otp, role = 'customer' } = req.body;
+    const rawMobile = req.body?.mobile;
+    const otp = String(req.body?.otp || '').trim();
 
-    if (!mobile || !otp) {
+    if (!rawMobile || !otp) {
       return res.status(400).json({ success: false, message: 'Mobile number and OTP are required' });
     }
+    if (!/^\d{4}$/.test(otp)) {
+      return res.status(400).json({ success: false, message: 'OTP must be 4 digits' });
+    }
 
-    const stored = otpStore.get(mobile);
+    const mobile = normalizePhoneNumber(rawMobile);
+    const user = await findUserByPhoneVariants(mobile);
 
-    // Check OTP exists
-    if (!stored) {
+    if (!user || !user.otp_code || !user.otp_expires_at) {
       return res.status(400).json({ success: false, message: 'No OTP found. Please request a new one.' });
     }
-
-    // Check 5-minute expiry
-    if (Date.now() - stored.createdAt > 5 * 60 * 1000) {
-      otpStore.delete(mobile);
+    if (new Date(user.otp_expires_at).getTime() < Date.now()) {
+      await user.update({ otp_code: null, otp_expires_at: null });
       return res.status(400).json({ success: false, message: 'OTP expired. Please request a new one.' });
     }
-
-    // Verify
-    if (stored.otp !== otp) {
+    if (user.otp_code !== otp) {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    // Find or create user
-    let user = await User.findByMobile(mobile);
-    if (!user) {
-      user = await User.create({
-        mobile,
-        name: `User_${mobile.slice(-4)}`,
-        role: role || 'agent',
-        is_verified: true,
-      });
-      console.log(`Created new user for mobile: ${mobile}`);
-    } else {
-      await user.update({ is_verified: true });
-      console.log(`Updated existing user for mobile: ${mobile}`);
-    }
+    // Success — clear the code so it can't be reused, flip verified, stamp login.
+    await user.update({
+      otp_code: null,
+      otp_expires_at: null,
+      is_verified: true,
+      last_login_at: new Date(),
+    });
 
     const token = jwt.sign(
       { id: user.id, mobile: user.mobile, role: user.role, name: user.name },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
-
-    otpStore.delete(mobile);
 
     res.json({
       success: true,
