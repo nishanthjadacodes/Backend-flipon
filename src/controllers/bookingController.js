@@ -932,12 +932,14 @@ const updateJobStatus = async (req, res) => {
     ) {
       if (submission_details) updates.submission_details = submission_details;
       updates.submitted_at = new Date();
-      if (!booking.completion_otp) {
-        // 6-digit by deliberate override: completion OTPs aren't SMS'd,
-        // they're read off the customer's screen and spoken to the rep, so
-        // they're not bound to the login Fast2SMS template length. Existing
-        // bookings already in the DB have 6-digit codes — keep parity.
-        const completionOTP = generateOTP(6);
+      // 4-digit to match the DLT-registered Fast2SMS template length.
+      // The SMS gateway rejects values that don't fit the registered
+      // {OTP} variable width, so this MUST match the login template.
+      // Regenerate when the stored code is missing OR a stale 6-digit
+      // value from before the migration — otherwise the rep app's
+      // 4-digit input can never verify it.
+      if (!booking.completion_otp || booking.completion_otp.length !== 4) {
+        const completionOTP = generateOTP();
         updates.completion_otp = completionOTP;
         updates.completion_otp_generated_at = new Date();
         console.log(`Completion OTP for booking ${id}: ${completionOTP}`);
