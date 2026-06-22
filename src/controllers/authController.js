@@ -8,6 +8,7 @@ import {
   getPhoneLookupVariants,
 } from '../utils/phone.js';
 import { sendOtpSms } from '../services/smsService.js';
+import { invalidateActiveCacheFor } from '../middleware/auth.js';
 
 // Review credentials shared by the customer + rep apps for Play Store
 // review. The bypass never hits Fast2SMS — the OTP is always REVIEW_OTP
@@ -298,4 +299,56 @@ const agentGuestLogin = async (_req, res) => {
   }
 };
 
-export { sendOTP, verifyOTP, signup, guestLogin, agentGuestLogin };
+// Customer-initiated account deletion. Required by Google Play 2024+ policy:
+// any app with sign-up must let the user delete their account from inside
+// the app. We anonymise the row instead of hard-deleting so foreign keys
+// from bookings / documents / referrals don't dangle — the user's PII is
+// scrubbed and the mobile UNIQUE slot is freed by swapping in a sentinel,
+// so the original number can sign up again as a fresh account later.
+const deleteAccount = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Not authenticated' });
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Sentinel mobile — frees the UNIQUE slot on users.mobile so the same
+    // number can re-sign up later as a new row. Fits in VARCHAR(15):
+    // 'del_' (4) + 11 UUID hex chars = 15 exactly.
+    const sentinel = `del_${String(user.id).replace(/-/g, '').slice(0, 11)}`;
+
+    await user.update({
+      name: 'Deleted User',
+      email: null,
+      mobile: sentinel,
+      profile_pic: null,
+      address: null,
+      expo_push_token: null,
+      fcm_token: null,
+      otp_code: null,
+      otp_expires_at: null,
+      is_active: false,
+      is_verified: false,
+    });
+
+    // Trim the auth-middleware active-cache TTL so the user's JWT (if
+    // re-presented) is rejected on the very next request via the
+    // is_active=false check, not after a 30s wait.
+    invalidateActiveCacheFor(userId);
+
+    res.json({
+      success: true,
+      message: 'Account deleted. Personal data has been removed.',
+    });
+  } catch (error) {
+    console.error('Error deleting account:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete account' });
+  }
+};
+
+export { sendOTP, verifyOTP, signup, guestLogin, agentGuestLogin, deleteAccount };

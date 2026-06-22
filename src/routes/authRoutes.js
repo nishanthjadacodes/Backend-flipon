@@ -5,6 +5,7 @@ import {
   signup,
   guestLogin,
   agentGuestLogin,
+  deleteAccount,
 } from '../controllers/authController.js';
 import { adminLogin, adminSignup, me, changePassword } from '../controllers/adminAuthController.js';
 import { getInviteByToken, acceptInvite } from '../controllers/adminInviteController.js';
@@ -28,6 +29,11 @@ router.post('/guest-login', guestLogin);
 // Agent-app twin — issues a shared-agent JWT so every tester of the
 // AgentApp sees the unassigned pending booking pool on Dashboard / Tasks.
 router.post('/agent-guest-login', agentGuestLogin);
+
+// Account deletion — Google Play 2024+ policy requirement. The mobile app's
+// Profile → Delete Account button calls this. Anonymises the row, frees
+// the mobile UNIQUE slot, deactivates the account. Auth-required.
+router.post('/delete-account', auth, deleteAccount);
 
 // Admin email+password login (admin panel)
 router.post('/admin/login', adminLogin);
